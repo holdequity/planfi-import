@@ -13,7 +13,9 @@
 //
 // Column mapping is dialect-driven: DIALECTS is a table keyed by header
 // fingerprints for known broker exports (Fidelity positions, Schwab positions,
-// Vanguard downloads) plus generic accounts/transactions layouts. A file whose
+// Vanguard downloads), the consumer finance tools the FIRE audience actually
+// uses (Monarch Money, YNAB, Empower/Personal Capital, Copilot Money), plus
+// generic accounts/transactions layouts. A file whose
 // headers match NO dialect still imports via best-effort generic mapping
 // (name-ish column + money-ish column) with a CSV_UNMAPPED_COLUMNS warning
 // naming every column that couldn't be mapped — balances are never silently
@@ -43,8 +45,10 @@ import { classify } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
 import { arr, defaultAsOf, warning } from '../util.mjs';
 
-// Same inflow/growth split as the MX + Finicity adapters.
-const CSV_INFLOW = /transfer|deposit|contribution|payroll|direct dep|buy/i;
+// Same inflow/growth split as the MX + Finicity adapters. `paycheck` is the
+// Monarch/Copilot spelling of payroll income; `capital gain` catches Monarch's
+// "Dividends & Capital Gains" category (growth, never a contribution).
+const CSV_INFLOW = /transfer|deposit|contribution|payroll|paycheck|direct dep|buy/i;
 const CSV_GROWTH = /dividend|interest|capital gain|reinvest/i;
 
 // ── dependency-free CSV parsing ──────────────────────────────────────────────
@@ -87,6 +91,20 @@ export function parseCsv(text) {
 // `columns` aliases) + the column map. First match wins, so brand dialects sit
 // above the generic ones. Headers are normalized (lowercased, trimmed,
 // parenthetical suffixes stripped: "Qty (Quantity)" → "qty").
+//
+// Optional per-dialect switches (all default off):
+//   labelKeys                — transactions: which mapped columns compose the
+//                              label tested against CSV_GROWTH/CSV_INFLOW
+//                              (joined with spaces; default ['label']).
+//   amountSign: -1           — transactions: the source writes spending as
+//                              POSITIVE and money-in as NEGATIVE (Copilot) —
+//                              flip so inflows are positive like everyone else.
+//   transactionsOnly         — the TOOL structurally cannot export balances
+//                              (YNAB) → emit CSV_TRANSACTIONS_ONLY so callers
+//                              know to pair the file with a balances source.
+//   latestBalancePerAccount  — accounts: the file is a balance HISTORY (one
+//                              row per account per date, Monarch) → keep only
+//                              the newest row per account, never sum history.
 
 const DIALECTS = [
   {
@@ -127,6 +145,131 @@ const DIALECTS = [
       costBasis: ['cost basis', 'cost basis total'],
     },
     requires: ['symbol', 'name', 'quantity', 'lastPrice', 'value'],
+  },
+  {
+    // Monarch Money — "Download balances" from the Accounts page. The feature
+    // is official; the column set (Date/Account/Account Type/Institution/
+    // Balance) is confirmed from real exports rather than published docs. The
+    // file is a balance HISTORY — one row per account per date — so rows are
+    // collapsed to the newest date per account (summing history would fabricate
+    // a balance). "Account Type" values ("Brokerage", "Credit Card",
+    // "Real Estate", …) route through csvKind()/classify() like any Type cell.
+    id: 'monarch-balances', kind: 'accounts',
+    latestBalancePerAccount: true,
+    columns: {
+      date: ['date'],
+      name: ['account', 'account name'],
+      type: ['account type', 'type'],
+      institution: ['institution'],
+      balance: ['balance'],
+    },
+    requires: ['date', 'name', 'type', 'balance'],
+  },
+  {
+    // Monarch Money — "Download transactions" (official export). Sign
+    // convention is Mint-style: spending negative, money-in positive, so a
+    // transfer INTO a brokerage shows as a positive Amount. The Category
+    // vocabulary carries the growth signal — "Dividends & Capital Gains" and
+    // "Interest" match CSV_GROWTH and are excluded from contribution
+    // inference; "Transfer"/"Buy"/"Paycheck" match CSV_INFLOW.
+    id: 'monarch-transactions', kind: 'transactions',
+    columns: {
+      date: ['date'],
+      merchant: ['merchant'],
+      category: ['category'],
+      account: ['account'],
+      statement: ['original statement'],
+      notes: ['notes'],
+      amount: ['amount'],
+      tags: ['tags'],
+    },
+    requires: ['date', 'merchant', 'category', 'account', 'amount'],
+    labelKeys: ['category', 'merchant', 'statement', 'notes'],
+  },
+  {
+    // YNAB — register export ("Register.csv" in the official export zip):
+    // Account/Flag/Date/Payee/Category Group/Category/Memo/Outflow/Inflow/
+    // Cleared. Transactions-shaped ONLY: YNAB structurally exports no account
+    // balances or holdings (transactionsOnly → CSV_TRANSACTIONS_ONLY). Money
+    // is an Outflow/Inflow column PAIR (both non-negative) — amount =
+    // inflow − outflow. Contribution signal lives in Payee ("Transfer :
+    // Checking") and Category ("Inflow: Ready to Assign" is income, not a
+    // contribution); tracking-account "Reconciliation Balance Adjustment"
+    // entries (how YNAB users record market growth) match neither inflow nor
+    // growth words → correctly excluded.
+    id: 'ynab-register', kind: 'transactions',
+    transactionsOnly: true,
+    columns: {
+      account: ['account'],
+      flag: ['flag'],
+      date: ['date'],
+      payee: ['payee'],
+      category: ['category group/category', 'category'],
+      categoryGroup: ['category group'],
+      memo: ['memo'],
+      outflow: ['outflow'],
+      inflow: ['inflow'],
+      cleared: ['cleared'],
+    },
+    requires: ['account', 'date', 'payee', 'outflow', 'inflow'],
+    labelKeys: ['category', 'payee', 'memo'],
+  },
+  {
+    // Empower (né Personal Capital) — Holdings-page CSV export. The feature is
+    // official; the column set (Ticker/Name/Shares/Price/Change/1 Day %/
+    // 1 Day $/Value, plus Account when viewing all accounts) is
+    // community-documented from real exports. No Cost Basis column in the
+    // stock export → every holding carries the NO_COST_BASIS info warning
+    // (alias kept in case Empower adds one). Empower offers no official
+    // all-accounts BALANCES csv — a hand-assembled one falls through to the
+    // generic-accounts dialect below, which is the intended path.
+    id: 'empower-holdings', kind: 'holdings', institution: 'Empower',
+    columns: {
+      accountName: ['account', 'account name'],
+      symbol: ['ticker'],
+      name: ['name', 'security name', 'description'],
+      quantity: ['shares'],
+      lastPrice: ['price'],
+      value: ['value', 'market value'],
+      costBasis: ['cost basis'],
+    },
+    requires: ['symbol', 'name', 'quantity', 'lastPrice', 'value'],
+  },
+  {
+    // Copilot Money — transactions export. LOW-CONFIDENCE dialect: Copilot
+    // publishes no format docs; the column set (date/name/amount/status/
+    // category/parent category/excluded/tags/type/account/account mask/note/
+    // recurring) and the INVERTED sign convention (spending POSITIVE, money-in
+    // NEGATIVE → amountSign: -1) are community-documented. If Copilot drifts
+    // the headers, the file falls to generic-transactions or best-effort
+    // mapping — and if the sign convention is ever wrong, inflows read as
+    // outflows and are EXCLUDED (conservative: no contributions fabricated).
+    // "parent category" is the fingerprint column no other tool exports.
+    // The `type` vocabulary ("internal transfer"/"income"/"regular") plus
+    // category feed the growth/inflow split; the budgeting-only `excluded`
+    // flag is deliberately ignored (an excluded transfer is still real money).
+    // Copilot's accounts export (name/type/balance shaped, also community-
+    // documented) intentionally has NO dedicated dialect — generic-accounts
+    // already fingerprints it.
+    id: 'copilot-transactions', kind: 'transactions',
+    amountSign: -1,
+    columns: {
+      date: ['date'],
+      merchant: ['name'],
+      amount: ['amount'],
+      status: ['status'],
+      category: ['category'],
+      parentCategory: ['parent category'],
+      excluded: ['excluded'],
+      tags: ['tags'],
+      type: ['type'],
+      account: ['account'],
+      accountMask: ['account mask'],
+      note: ['note'],
+      recurring: ['recurring'],
+    },
+    requires: ['date', 'amount', 'category', 'parentCategory', 'account'],
+    labelKeys: ['type', 'category', 'parentCategory', 'merchant', 'note'],
   },
   {
     id: 'generic-transactions', kind: 'transactions',
@@ -205,16 +348,38 @@ export const csvAdapter = {
       } else if (dialect.kind === 'transactions') {
         for (const r of data) {
           const cell = (k) => (map[k] != null ? r[map[k]] : undefined);
-          txnRows.push({
-            ref: str(cell('account')),
-            amount: moneyCell(cell('amount')),
-            date: str(cell('date')),
-            label: str(cell('label')),
-          });
+          let amount;
+          if (map.amount != null) {
+            amount = moneyCell(cell('amount'));
+          } else {
+            // Outflow/Inflow column pair (YNAB): both non-negative, amount is
+            // the net. Both cells absent/junk → no amount, row is skipped.
+            const inflow = moneyCell(cell('inflow'));
+            const outflow = moneyCell(cell('outflow'));
+            amount = inflow == null && outflow == null ? undefined : (inflow ?? 0) - (outflow ?? 0);
+          }
+          // Copilot writes spending positive / money-in negative — flip so a
+          // positive amount always means money INTO the account.
+          if (amount != null && dialect.amountSign === -1) amount = -amount;
+          // The label is what CSV_GROWTH/CSV_INFLOW are tested against —
+          // dialects with a category vocabulary compose it from several
+          // columns so the growth signal is never missed.
+          const label = (dialect.labelKeys ?? ['label'])
+            .map((k) => str(cell(k))).filter(Boolean).join(' ');
+          txnRows.push({ ref: str(cell('account')), amount, date: str(cell('date')), label });
+        }
+        if (dialect.transactionsOnly) {
+          // The TOOL (not just this file) cannot export balances — say so
+          // once per file, or the import looks mysteriously account-less.
+          warnings.push(warning('CSV_TRANSACTIONS_ONLY', 'warn',
+            `"${fname}" is a ${dialect.id} export — it carries transactions ONLY, never account balances or holdings. Its deposits feed contribution inference; import balances from another file (a brokerage positions/accounts CSV) or enter them manually.`));
         }
         warnUnmappedColumns(dialect, map, headers, fname, { warnings, unmapped });
       } else {
-        mapAccountsFile(data, map, fname, fileIdx, { accounts, warnings, uniqueId });
+        // Balance-history files (Monarch) carry one row per account per DATE —
+        // keep only the newest row per account before mapping.
+        const acctRows = dialect.latestBalancePerAccount ? latestRowPerAccount(data, map) : data;
+        mapAccountsFile(acctRows, map, fname, fileIdx, { accounts, warnings, uniqueId });
         warnUnmappedColumns(dialect, map, headers, fname, { warnings, unmapped });
       }
     });
@@ -311,6 +476,27 @@ function warnUnmappedColumns(dialect, map, headers, fname, ctx) {
   ctx.unmapped.push({ file: fname, unmappedColumns: missed });
 }
 
+/**
+ * Collapse a balance-HISTORY file (one row per account per date, e.g. a
+ * Monarch balances download) to the newest row per account. A later row wins
+ * a date tie; rows whose dates don't parse lose to any parseable date but
+ * still fall back to last-row-wins among themselves — deterministic either way.
+ */
+function latestRowPerAccount(data, map) {
+  const byName = new Map(); // low(account name) → { row, when }
+  for (const r of data) {
+    const name = str(map.name != null ? r[map.name] : undefined);
+    if (!name) continue; // blank/footer rows can't identify an account
+    const when = Date.parse(str(map.date != null ? r[map.date] : undefined));
+    const prev = byName.get(low(name));
+    const newer = !prev
+      || !Number.isFinite(prev.when)
+      || (Number.isFinite(when) && when >= prev.when);
+    if (newer) byName.set(low(name), { row: r, when });
+  }
+  return [...byName.values()].map((x) => x.row);
+}
+
 // ── file mappers ─────────────────────────────────────────────────────────────
 
 /** Positions export → one investment account per account-number/name group. */
@@ -385,7 +571,7 @@ function mapAccountsFile(data, map, fname, fileIdx, ctx) {
     const hint = fromType ?? csvKind(name);
     let cls;
     if (hint) {
-      cls = classify(hint[0], hint[1]);
+      cls = classifyHint(hint);
       if (!fromType) {
         ctx.warnings.push(warning('CLASSIFICATION_GUESSED', 'warn',
           `CSV account "${name || id}" in "${fname}" has no Type value — typed from its name → ${cls.accountClass}/${cls.taxTreatment}. Add a Type column to remove the guess.`, id));
@@ -469,7 +655,7 @@ function bestEffortAccounts(rows, fname, fileIdx, ctx) {
     const name = nameIdx >= 0 ? str(r[nameIdx]) : '';
     const id = ctx.uniqueId(`csv:${fileIdx}:${rowIdx}`);
     const hint = csvKind(name);
-    const cls = hint ? classify(hint[0], hint[1]) : { accountClass: 'investment', taxTreatment: 'taxable' };
+    const cls = hint ? classifyHint(hint) : { accountClass: 'investment', taxTreatment: 'taxable' };
     ctx.warnings.push(warning('CLASSIFICATION_GUESSED', 'warn',
       `CSV account "${name || id}" in "${fname}" ${hint ? 'typed from its name' : 'has no recognizable type — imported as a taxable investment'} → ${cls.accountClass}/${cls.taxTreatment} (best-effort file mapping).`, id));
     const isDebt = cls.accountClass === 'loan' || cls.accountClass === 'credit';
@@ -535,6 +721,10 @@ function csvKind(s) {
   if (/credit card|creditcard|visa|mastercard|amex|discover card/.test(t)) return ['credit', 'credit card'];
   if (/line of credit/.test(t)) return ['credit', 'line of credit'];
   if (/\bloan\b/.test(t)) return ['loan', undefined];
+  // Monarch account types include physical assets ("Real Estate", "Vehicle",
+  // "Valuables") — model them as property, not as a fake investment balance.
+  if (/real estate|\bproperty\b|primary home|family home/.test(t)) return ['property', 'real estate'];
+  if (/vehicle|valuables/.test(t)) return ['property', t];
   if (/checking|savings|money market|certificate|\bcd\b|cash management/.test(t)) return ['depository', t];
   if (/hsa|health savings/.test(t)) return ['investment', 'hsa'];
   if (/529|coverdell|education/.test(t)) return ['investment', '529'];
@@ -543,6 +733,18 @@ function csvKind(s) {
   if (/401|403b|457b|\bira\b|sep|simple|keogh|tsp|pension|retirement|rollover/.test(t)) return ['investment', t];
   if (/brokerage|invest|taxable|mutual fund|stock|etf|crypto/.test(t)) return ['investment', t];
   return undefined;
+}
+
+/**
+ * classify() speaks depository/investment/loan/credit; `property` is routed
+ * around it (same pattern as the MX adapter) — a house/vehicle balance is a
+ * market value with no tax wrapper, and letting classify() fall through would
+ * mislabel it a taxable investment.
+ */
+function classifyHint(hint) {
+  return hint[0] === 'property'
+    ? { accountClass: 'property', taxTreatment: 'na', confidence: 'high' }
+    : classify(hint[0], hint[1]);
 }
 
 /**

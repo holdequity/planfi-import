@@ -164,6 +164,7 @@ append-only** — switch on them; the human `message` may improve between versio
 | `NEGATIVE_BALANCE_CLAMPED` | warn | Negative *asset* balance clamped to $0 → check for margin/overdraft |
 | `DEBT_RATE_MISSING` | warn | Debt modeled at 0% APR → supply the rate via the `debt_rate` ask |
 | `CSV_UNMAPPED_COLUMNS` | warn | CSV columns matched no dialect mapping; named in the message → rename headers or accept the best-effort import |
+| `CSV_TRANSACTIONS_ONLY` | warn | The file's tool (e.g. YNAB) structurally exports no account balances → pair it with a balances file or collect balances from the user |
 
 ## Limitations (honest)
 
@@ -195,7 +196,7 @@ append-only** — switch on them; the human `message` may improve between versio
 | MX | `'mx'` | accounts + holdings + transactions; `PROPERTY` gives real home values |
 | Finicity (Mastercard Open Banking) | `'finicity'` | accounts + positions + transactions; epoch-second dates handled |
 | FDX (Financial Data Exchange) | `'fdx'` | the US open-banking standard (CFPB §1033; Akoya speaks it natively); wrapped or flat Account entities, `debitCreditMemo`-aware contribution inference |
-| CSV files | `'csv'` | keyless; dialect table for Fidelity/Schwab/Vanguard positions + generic accounts/transactions layouts |
+| CSV files | `'csv'` | keyless; dialect table for Fidelity/Schwab/Vanguard positions, Monarch Money, YNAB, Empower/Personal Capital, Copilot Money exports + generic accounts/transactions layouts |
 | OFX files | `'ofx'` | keyless; OFX 1.x SGML and 2.x XML; bank + card + investment message sets |
 
 ### Keyless import (CSV / OFX)
@@ -221,13 +222,22 @@ const { plan, warnings } = importToPlan('csv', {
 importToPlan('ofx', { content: readFileSync('statement.ofx', 'utf8'), owner: { age: 45 } });
 ```
 
-Recognized CSV dialects: **Fidelity positions** (Account Number/Account Name/Symbol/…/Cost Basis
-Total), **Schwab positions** (Symbol/Description/Qty/Price/Mkt Val/Cost Basis), **Vanguard
-downloads** (Account Number/Investment Name/Symbol/Shares/Share Price/Total Value), plus **generic
-accounts** (Account Name/Type/Balance + optional Interest Rate/Minimum Payment) and **generic
-transactions** (Account/Date/Amount/Description) layouts. Files matching no dialect import
-best-effort with a `CSV_UNMAPPED_COLUMNS` warning naming what was skipped. Money cells handle `$`,
-thousands commas, and accounting-style `(1,850.00)` negatives.
+Recognized CSV dialects — brokerages: **Fidelity positions** (Account Number/Account Name/Symbol/…/
+Cost Basis Total), **Schwab positions** (Symbol/Description/Qty/Price/Mkt Val/Cost Basis),
+**Vanguard downloads** (Account Number/Investment Name/Symbol/Shares/Share Price/Total Value).
+Consumer finance tools: **Monarch Money** balances (Date/Account/Account Type/Institution/Balance —
+a balance HISTORY, collapsed to the newest row per account, never summed) and transactions
+(Date/Merchant/Category/…/Amount; the "Dividends & Capital Gains" category is excluded as growth),
+**YNAB** register (Account/…/Outflow/Inflow pair — transactions ONLY: YNAB structurally exports no
+balances, so the import says so with `CSV_TRANSACTIONS_ONLY` and expects a balances file alongside),
+**Empower / Personal Capital** holdings (Account/Ticker/Name/Shares/Price/Value; the export carries
+no cost basis → `NO_COST_BASIS` per holding), and **Copilot Money** transactions
+(community-documented format; its inverted sign convention — spending positive — is flipped). Plus
+**generic accounts** (Account Name/Type/Balance + optional Interest Rate/Minimum Payment) and
+**generic transactions** (Account/Date/Amount/Description) layouts — Copilot's accounts export
+fingerprints as generic accounts by design. Files matching no dialect import best-effort with a
+`CSV_UNMAPPED_COLUMNS` warning naming what was skipped. Money cells handle `$`, thousands commas,
+and accounting-style `(1,850.00)` negatives.
 
 Keyless honesty (both formats carry less signal than an API — the gaps are surfaced, not papered
 over): positions CSVs and OFX carry **no tax-treatment info**, so account types are guessed

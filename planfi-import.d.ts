@@ -91,7 +91,8 @@ export type WarningCode =
   | 'MORTGAGE_SKIPPED'
   | 'NEGATIVE_BALANCE_CLAMPED'
   | 'DEBT_RATE_MISSING'
-  | 'CSV_UNMAPPED_COLUMNS';
+  | 'CSV_UNMAPPED_COLUMNS'
+  | 'CSV_TRANSACTIONS_ONLY';
 
 export interface ImportWarning {
   code: WarningCode;

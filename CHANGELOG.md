@@ -4,6 +4,47 @@ All notable changes to `planfi-import`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## 0.5.0 — 2026-07-03
+
+### Added
+
+- **Consumer-tool CSV dialects** — the existing `csv` adapter's dialect table now fingerprints the
+  export formats of the consumer finance tools the FIRE audience actually uses (no new adapters —
+  dialect work inside `src/adapters/csv.mjs`):
+  - **Monarch Money balances** (`Date/Account/Account Type/Institution/Balance`) — the file is a
+    balance HISTORY, so rows are collapsed to the newest date per account (history is never
+    summed). Explicit `Account Type` values classify at high confidence; the Monarch-specific
+    `Real Estate`/`Vehicle`/`Valuables` types become `property`-class accounts (owned homes /
+    physical assets), not fake investment balances.
+  - **Monarch Money transactions** (`Date/Merchant/Category/Account/Original Statement/Notes/
+    Amount/Tags`) — Mint-style signs; the Category vocabulary feeds contribution inference with
+    "Dividends & Capital Gains"/"Interest" excluded as growth.
+  - **YNAB register** (`Account/Flag/Date/Payee/Category Group/Category/Memo/Outflow/Inflow/
+    Cleared`) — the `Outflow`/`Inflow` column PAIR nets to a signed amount; transfers into
+    tracking accounts count as contributions while reconciliation balance adjustments (market
+    growth) do not. YNAB structurally exports **no balances**, so the import emits the new
+    `CSV_TRANSACTIONS_ONLY` warning telling the caller to pair the register with a balances file.
+  - **Empower / Personal Capital holdings** (`Account/Ticker/Name/Shares/Price/…/Value`,
+    community-documented column set) — rows group into accounts by the `Account` column; the
+    export carries no cost basis → `NO_COST_BASIS` per holding. Empower offers no official
+    all-accounts balances CSV; a hand-assembled one falls through to generic-accounts deliberately.
+  - **Copilot Money transactions** (community-documented, LOW-confidence dialect fingerprinted on
+    its `parent category` column) — Copilot's INVERTED sign convention (spending positive,
+    money-in negative) is flipped before inference; if the convention is ever wrong, inflows read
+    as outflows and are excluded (conservative — no contributions fabricated). Copilot's accounts
+    export fingerprints as generic-accounts by design.
+- **`CSV_TRANSACTIONS_ONLY` warning code** (append-only catalog addition, registered in
+  `src/canonical.ts` + `planfi-import.d.ts` + the README/guide catalogs): the imported file's tool
+  structurally cannot export balances — pair it with a balances source.
+- Transactions dialects gained per-dialect vocabulary switches: `labelKeys` (compose the
+  growth/inflow test label from several columns), `amountSign: -1` (inverted-sign sources), and an
+  Outflow/Inflow column-pair path; `paycheck` joined the shared inflow words.
+- CSV `Type`/name cells naming real estate or vehicles now classify as `property` (same
+  routing-around-`classify()` pattern as the MX adapter), so they reach the plan as real estate,
+  not as a taxable-investment guess.
+- The `csv` sandbox fixture now carries one realistic synthetic file per consumer dialect (seven
+  files total) and still round-trips the real monorepo mapper in wire-conformance.
+
 ## [0.4.0] — 2026-07-02
 
 ### Added

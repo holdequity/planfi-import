@@ -118,6 +118,7 @@ Codes live in the append-only `WarningCode` union in `src/canonical.ts` (mirrore
 | `NO_COST_BASIS` | info | A holding has no cost basis in the source. One per holding (API adapters) or one per account (structural to the format, e.g. OFX) |
 | `COARSE_INFERENCE` | warn | Contribution inference counted deposits that carried NO category/description/type label. Emit ONCE per import, not per transaction |
 | `CSV_UNMAPPED_COLUMNS` | warn | (csv adapter) columns matched no dialect mapping; name them in the message |
+| `CSV_TRANSACTIONS_ONLY` | warn | (csv adapter) the file's TOOL structurally exports no balances (e.g. a YNAB register) — the user must pair it with a balances source |
 
 Codes the **shared mapper** emits (never emit these from an adapter — they fire automatically
 when your CFP is right): `CONTRIBUTION_CLAMPED`, `CONTRIBUTION_IMPLAUSIBLE`,
@@ -215,3 +216,29 @@ npm run demo > /dev/null
 
 If any step fails, the failure message names the file to fix — the harness messages are written
 to be actionable. Do not weaken a harness assertion to get green; fix the adapter.
+
+---
+
+## Appendix: extending the CSV dialect table (vs writing an adapter)
+
+Field feedback from the first dialect build (2026-07-03). Dialect work is NOT full adapter work —
+only this subset of the checklist applies: the dialect entry in `src/adapters/csv.mjs`, a fixture
+FILE added to `fixtures/csv-sandbox.mjs` (the registry is one-entry-per-adapter — extend the CSV
+fixture, don't add a new registry entry), tests in `test/csv.test.mjs`, README dialect table,
+CHANGELOG. Sections 5 and 9 of this guide apply as written; sections 7–8 mostly do not.
+
+Rules the table's comments encode (now stated here):
+- **Ordering is first-match-wins.** Put SPECIFIC fingerprints (a column name unique to the tool,
+  e.g. Copilot's `parent category`, Empower's `ticker`) ABOVE the generic dialects, and run a
+  collision check against `generic-accounts`/`generic-holdings` before shipping — a name+value
+  file will happily match generic.
+- **Transactions-only tools** (YNAB-style) must set `transactionsOnly` and yield ZERO accounts —
+  emit `CSV_TRANSACTIONS_ONLY`, never fabricate balances from a register.
+- **Balance-history exports** (Monarch-style) collapse to the newest row per account — never sum.
+- **Property-class rows** ('Real Estate', 'Vehicle') route AROUND `classify()` to the `property`
+  class (see the pattern in `mx.mjs` and `csv.mjs` — the classification cheat sheet covers
+  investment/depository/loan/credit only).
+- **Unknown sign conventions**: prefer the mapping whose failure mode excludes inflows
+  (conservative) over one that could fabricate contributions.
+- New warning codes go in `src/canonical.ts` + `planfi-import.d.ts` + the README catalog **and
+  this guide's warning table**.
