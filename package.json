@@ -1,0 +1,19 @@
+{
+  "name": "planfi-import",
+  "version": "0.1.0",
+  "description": "Import customer financial data from aggregators (Plaid, MX, OFX) into Planfi plans via a canonical model.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./canonical": "./src/canonical.ts"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test",
+    "demo": "node -e \"import('./src/index.mjs').then(async({importToPlan})=>{const{plaidRaw}=await import('./fixtures/plaid-sandbox.mjs');console.log(JSON.stringify(importToPlan('plaid',plaidRaw),null,2))})\""
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["planfi", "plaid", "mx", "aggregator", "financial-data", "import", "adapter"],
+  "repository": { "type": "git", "url": "https://github.com/holdequity/planfi-import" }
+}
