@@ -92,7 +92,8 @@ export type WarningCode =
   | 'NEGATIVE_BALANCE_CLAMPED'
   | 'DEBT_RATE_MISSING'
   | 'CSV_UNMAPPED_COLUMNS'
-  | 'CSV_TRANSACTIONS_ONLY';
+  | 'CSV_TRANSACTIONS_ONLY'
+  | 'IMPORT_EMPTY';
 
 export interface ImportWarning {
   code: WarningCode;

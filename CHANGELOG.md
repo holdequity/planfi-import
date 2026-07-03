@@ -4,10 +4,28 @@ All notable changes to `planfi-import`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
-## 0.5.0 — 2026-07-03
+## 0.6.0 — 2026-07-03
 
 ### Added
 
+- **`batch` CLI command** — bulk-load thousands of customers through the managed
+  `import_financial_data_batch` endpoint (25 items per call):
+  `npx planfi-import batch <dir-or-ndjson> --source plaid --token pft_…
+  [--concurrency 4] [--resume manifest.json] [--batch-size 25 | --single]`.
+  Input is a directory of `<user_id>.json` payload files (filename stem = `user_id`) or an
+  `.ndjson` file (`{"user_id", "payload"[, "plan_name", "source"]}` per line). The command
+  chunks the load through the batch endpoint with a small worker pool, writes a **resume
+  manifest / results file** (per-customer `ok`/`plan_id`/`updated`/`error` plus **full
+  `needsInput` objects** — `field`/`label`/`accountId` — for collection worklists), skips
+  already-ok items on re-run, never crashes on one malformed file (recorded, run continues),
+  and prints a final report with the missing-data rollup (needsInput field → customers).
+  Exit 0 all-ok / 1 if any item failed / 2 usage error.
+- **Import upserts (server-side; documented here because the CLI relies on them)** — the
+  managed import tools now key on **(partner account, `user_id`)**: the first import for a
+  customer mints their plan; every re-import for the same `user_id` **updates that plan in
+  place** (same `plan_id` back, `updated: true`). Batch runs are therefore idempotent — the
+  resume manifest just saves quota. This deliberately differs from `generate_financial_plan`,
+  which always mints; the `plan` command (which uses `generate_financial_plan`) is unchanged.
 - **Consumer-tool CSV dialects** — the existing `csv` adapter's dialect table now fingerprints the
   export formats of the consumer finance tools the FIRE audience actually uses (no new adapters —
   dialect work inside `src/adapters/csv.mjs`):

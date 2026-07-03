@@ -13,6 +13,13 @@
 //                 [--user-id <id>] [--base https://api.planfi.app] [--json]
 //       Build the plan AND create it for real via
 //       POST /v1/tools/generate_financial_plan; prints the plan_id.
+//   planfi-import batch <dir-or-ndjson> --source <id> --token pft_…
+//                 [--concurrency 4] [--resume manifest.json] [--batch-size 25|--single]
+//       Bulk-load thousands of customers through import_financial_data_batch
+//       (25 items/call). Filename stem (or the NDJSON "user_id" field) = the
+//       customer's user_id — the (account, user_id) upsert identity, so the
+//       run is idempotent. Resume manifest + results file written next to the
+//       input; re-runs skip already-ok items.
 //
 // Payload files: JSON for the API-shaped sources (plaid/mx/finicity — the
 // merged provider responses). The keyless sources take their files DIRECTLY:
@@ -23,7 +30,7 @@
 // Colors: only when stdout is a TTY (and NO_COLOR is unset) — pipe-safe.
 // Exit codes: 0 ok · 1 hard failure · 2 usage error.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, renameSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { importToPlan, ADAPTERS } from '../src/index.mjs';
 
@@ -46,28 +53,47 @@ Usage:
   planfi-import demo [--source plaid|mx|finicity|fdx|csv|ofx] [--json]
   planfi-import validate <payload> [<payload>…] --source <id> [--json]
   planfi-import plan <payload> [<payload>…] --source <id> [--token pft_…] [--user-id <id>] [--base <url>] [--json]
+  planfi-import batch <dir-or-ndjson> --source <id> --token pft_…
+                [--concurrency 4] [--resume manifest.json]
+                [--batch-size 25 | --single] [--base <url>] [--json]
 
 Commands:
   demo       Run the bundled sandbox fixture for a source (default: plaid).
   validate   Import your payload and print structured warnings + needsInput.
              Exits 0 even with warnings (they are diagnostics); 1 on failure.
   plan       Import AND create a real plan via POST /v1/tools/generate_financial_plan.
+  batch      Bulk-load MANY customers via import_financial_data_batch (25/call).
+             Input: a directory of <user_id>.json payload files (filename stem =
+             user_id), or an .ndjson file with {"user_id","payload"[,"plan_name"]}
+             per line. (your account, user_id) is a stable upsert identity, so the
+             whole run is SAFE TO RE-RUN — re-imports update, never duplicate.
+             Writes a resume manifest + results file next to the input; a re-run
+             skips items already imported ok. Exits 0 all-ok / 1 if any item failed.
 
 Payloads:
   plaid|mx|finicity|fdx  one .json file: the merged provider API responses.
   csv                one or more .csv files (passed directly), or one .json
                      payload of shape { files: [{name, content}], owner, asOf }.
   ofx                one .ofx/.qfx file (passed directly), or one .json payload.
+  batch dir          *.json payload files only (wrap csv/ofx text as their
+                     { files: [...] } / { content } JSON payload shapes).
 
 Options:
-  --source <id>    adapter id: ${Object.keys(ADAPTERS).join(' | ')}
-  --token <tok>    planfi API token (else anonymous free-quota)
-  --user-id <id>   end-user id, sent as X-Planfi-User-Id. The API token
-                   identifies your (partner) tenant; this attributes the plan
-                   and usage to one end user within it. Optional.
-  --base <url>     API base URL (default ${DEFAULT_BASE})
-  --json           machine-readable JSON output (implies no colors)
-  -h, --help       this help
+  --source <id>       adapter id: ${Object.keys(ADAPTERS).join(' | ')}
+  --token <tok>       planfi API token (else anonymous free-quota)
+  --user-id <id>      end-user id, sent as X-Planfi-User-Id. The API token
+                      identifies your (partner) tenant; this attributes the plan
+                      and usage to one end user within it — and makes the import
+                      an UPSERT (re-import updates that user's plan). Optional.
+  --base <url>        API base URL (default ${DEFAULT_BASE})
+  --json              machine-readable JSON output (implies no colors)
+  --concurrency <n>   batch: parallel in-flight requests (default 4, max 16)
+  --resume <path>     batch: manifest path (default <input>.planfi-manifest.json);
+                      loaded if present — items already ok are skipped
+  --batch-size <n>    batch: items per API call (default 25, the server max)
+  --single            batch: one import_financial_data call per item instead of
+                      the batch endpoint (full per-item responses; more calls)
+  -h, --help          this help
 `;
 
 // ── arg parsing (dependency-free) ────────────────────────────────────────────
@@ -77,7 +103,11 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '-h' || a === '--help') args.help = true;
     else if (a === '--json') args.json = true;
-    else if (a === '--source' || a === '--token' || a === '--base' || a === '--user-id') {
+    else if (a === '--single') args.single = true;
+    else if (
+      a === '--source' || a === '--token' || a === '--base' || a === '--user-id' ||
+      a === '--concurrency' || a === '--resume' || a === '--batch-size'
+    ) {
       const key = a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase());
       const v = argv[++i];
       if (v == null || v.startsWith('--')) fail(2, `Missing value for ${a}`);
@@ -227,12 +257,290 @@ async function cmdPlan(args) {
   process.stdout.write(dim(`  every planfi tool now accepts this plan_id (analyze_fire_number, run_backtesting, …)`) + '\n');
 }
 
+// ── batch: bulk customer loading via import_financial_data_batch ─────────────
+
+const clampInt = (v, def, min, max) => {
+  const n = parseInt(v ?? '', 10);
+  return Number.isFinite(n) ? Math.max(min, Math.min(n, max)) : def;
+};
+
+/**
+ * Load the batch work list from a directory of *.json payload files (filename
+ * stem = user_id) or an .ndjson file ({user_id, payload[, plan_name, source]}
+ * per line). NEVER throws on one bad file/line — the item is recorded with a
+ * local error and the rest continue (the CLI mirror of the server's
+ * partial-success contract).
+ */
+function loadBatchItems(input, defaultSource) {
+  const items = [];
+  const push = (user_id, fn) => {
+    try {
+      items.push({ user_id, ...fn() });
+    } catch (e) {
+      items.push({ user_id, error: { code: 'LOCAL_READ_FAILED', message: String(e.message ?? e).slice(0, 300) } });
+    }
+  };
+  const st = statSync(input); // ENOENT throws → caught by main's catch → exit 1
+  if (st.isDirectory()) {
+    const files = readdirSync(input).filter((f) => /\.json$/i.test(f)).sort();
+    if (!files.length) fail(2, `No *.json payload files in ${input}`);
+    for (const f of files) {
+      push(path.basename(f, path.extname(f)), () => ({
+        payload: JSON.parse(readFileSync(path.join(input, f), 'utf8')),
+        source: defaultSource,
+      }));
+    }
+    return items;
+  }
+  // NDJSON: one {"user_id": "...", "payload": {...}} per line.
+  const lines = readFileSync(input, 'utf8').split('\n');
+  lines.forEach((line, i) => {
+    const t = line.trim();
+    if (!t) return;
+    let row;
+    try {
+      row = JSON.parse(t);
+    } catch (e) {
+      items.push({ user_id: `line-${i + 1}`, error: { code: 'LOCAL_PARSE_FAILED', message: `NDJSON line ${i + 1}: ${String(e.message).slice(0, 200)}` } });
+      return;
+    }
+    const uid = typeof row?.user_id === 'string' && row.user_id ? row.user_id : `line-${i + 1}`;
+    if (!row || typeof row.payload !== 'object' || row.payload === null) {
+      items.push({ user_id: uid, error: { code: 'LOCAL_PARSE_FAILED', message: `NDJSON line ${i + 1}: missing "payload" object` } });
+      return;
+    }
+    items.push({
+      user_id: uid,
+      payload: row.payload,
+      source: typeof row.source === 'string' && row.source ? row.source : defaultSource,
+      ...(typeof row.plan_name === 'string' ? { plan_name: row.plan_name } : {}),
+    });
+  });
+  if (!items.length) fail(2, `No NDJSON rows in ${input}`);
+  return items;
+}
+
+/** The manifest doubles as the RESULTS file — per-user status keyed by user_id. */
+function defaultManifestPath(input) {
+  return `${input.replace(/[/\\]+$/, '')}.planfi-manifest.json`;
+}
+
+function loadManifest(p) {
+  if (!existsSync(p)) return { version: 1, items: {} };
+  try {
+    const m = JSON.parse(readFileSync(p, 'utf8'));
+    return m && typeof m === 'object' && m.items ? m : { version: 1, items: {} };
+  } catch {
+    return { version: 1, items: {} }; // corrupt manifest → start fresh, never crash
+  }
+}
+
+/** Atomic-ish write (tmp + rename) so a crash mid-write can't corrupt the manifest. */
+function saveManifest(p, manifest) {
+  const tmp = `${p}.tmp`;
+  writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+  renameSync(tmp, p);
+}
+
+/**
+ * Full needsInput objects (field/label/accountId) for the RESULTS file — the
+ * per-customer collection worklist. The batch endpoint returns field NAMES per
+ * item (rollup-friendly); the CLI has the payload in hand, so it re-runs the
+ * SAME library locally (identical code path to the server) for the full asks.
+ * Best-effort: a local hiccup yields [] rather than failing the item.
+ */
+function localDiagnostics(source, payload) {
+  try {
+    const { warnings, needsInput } = importToPlan(source, payload);
+    return {
+      warnings: warnings.map((w) => w.code),
+      needs_input: needsInput.map((n) => ({
+        field: n.field,
+        label: n.label,
+        ...(n.accountId ? { accountId: n.accountId } : {}),
+      })),
+    };
+  } catch {
+    return { warnings: [], needs_input: [] };
+  }
+}
+
+/** Tiny promise pool: run `worker(task)` over tasks, at most `n` in flight. */
+async function pool(tasks, n, worker) {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(n, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      await worker(tasks[i]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+async function postJson(url, token, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
+  return { status: res.status, ok: res.ok, json };
+}
+
+function printBatchReport(manifest, { skipped }) {
+  const rows = Object.entries(manifest.items);
+  const oks = rows.filter(([, r]) => r.ok);
+  const fails = rows.filter(([, r]) => !r.ok);
+  const updatedN = oks.filter(([, r]) => r.updated).length;
+
+  const out = [];
+  out.push(bold('batch import report'));
+  out.push(`  ${green(`ok: ${oks.length}`)} (${updatedN} updated in place, ${oks.length - updatedN} created)` +
+    (skipped ? dim(`  · skipped (already ok in manifest): ${skipped}`) : '') +
+    (fails.length ? `  · ${red(`failed: ${fails.length}`)}` : ''));
+
+  // needs_input rollup: field → customers still missing it (the founder view).
+  const rollup = {};
+  for (const [, r] of oks) for (const n of r.needs_input ?? []) rollup[n.field] = (rollup[n.field] ?? 0) + 1;
+  const rollupRows = Object.entries(rollup).sort((a, b) => b[1] - a[1]);
+  if (rollupRows.length) {
+    out.push('');
+    out.push(bold('missing data across the batch') + dim(' (needsInput field → customers):'));
+    for (const [field, count] of rollupRows) out.push(`  ${cyan(field.padEnd(22))} ${count}`);
+  }
+  const wRollup = {};
+  for (const [, r] of oks) for (const c of r.warnings ?? []) wRollup[c] = (wRollup[c] ?? 0) + 1;
+  const wRows = Object.entries(wRollup).sort((a, b) => b[1] - a[1]);
+  if (wRows.length) {
+    out.push('');
+    out.push(bold('warnings across the batch') + dim(' (code → occurrences):'));
+    for (const [code, count] of wRows) out.push(`  ${yellow(code.padEnd(28))} ${count}`);
+  }
+  if (fails.length) {
+    out.push('');
+    out.push(bold(`failed items (${fails.length})`) + dim(' — fix + re-run; the manifest skips the done ones:'));
+    for (const [uid, r] of fails.slice(0, 25)) {
+      out.push(`  ${red(uid)}: ${r.error?.code ?? 'ERROR'} ${dim((r.error?.message ?? '').slice(0, 120))}`);
+    }
+    if (fails.length > 25) out.push(dim(`  … and ${fails.length - 25} more (see the manifest file)`));
+  }
+  process.stdout.write(out.join('\n') + '\n');
+}
+
+async function cmdBatch(args) {
+  const source = args.source ?? fail(2, 'batch requires --source');
+  if (!ADAPTERS[source]) fail(2, `Unknown --source "${source}". Known: ${Object.keys(ADAPTERS).join(', ')}`);
+  const input = args.positional[0] ?? fail(2, 'batch requires a directory of *.json payloads or an .ndjson file');
+  const base = (args.base ?? DEFAULT_BASE).replace(/\/$/, '');
+  const batchSize = args.single ? 1 : clampInt(args.batchSize, 25, 1, 25);
+  const concurrency = clampInt(args.concurrency, 4, 1, 16);
+  const manifestPath = args.resume ?? defaultManifestPath(input);
+
+  const all = loadBatchItems(input, source);
+  const manifest = loadManifest(manifestPath);
+  manifest.source = source;
+
+  // Resume: anything already ok in the manifest is skipped. (The server upsert
+  // makes re-sends harmless anyway — skipping just saves quota + time.)
+  let skipped = 0;
+  const pending = [];
+  for (const item of all) {
+    if (manifest.items[item.user_id]?.ok) { skipped++; continue; }
+    if (item.error) {
+      // Locally-unreadable file/line: recorded, never sent, never crashes the run.
+      manifest.items[item.user_id] = { ok: false, error: item.error, at: Date.now() };
+      continue;
+    }
+    pending.push(item);
+  }
+
+  const record = (item, r) => {
+    manifest.items[item.user_id] = { ...r, at: Date.now() };
+  };
+  const recordOk = (item, res) => {
+    record(item, {
+      ok: true,
+      plan_id: res.plan_id,
+      updated: res.updated === true,
+      ...localDiagnostics(item.source, item.payload), // full needsInput objects + warning codes
+    });
+  };
+
+  // Chunk the pending items and drive them through a small worker pool.
+  const chunks = [];
+  for (let i = 0; i < pending.length; i += batchSize) chunks.push(pending.slice(i, i + batchSize));
+
+  await pool(chunks, concurrency, async (chunk) => {
+    try {
+      if (args.single) {
+        const item = chunk[0];
+        const { ok, status, json } = await postJson(`${base}/v1/tools/import_financial_data`, args.token, {
+          source: item.source, payload: item.payload, user_id: item.user_id,
+          ...(item.plan_name ? { plan_name: item.plan_name } : {}),
+        });
+        if (ok && json && !json.error) recordOk(item, json);
+        else record(item, { ok: false, error: json?.error ?? { code: `HTTP_${status}`, message: `single import returned ${status}` } });
+      } else {
+        const body = {
+          items: chunk.map((it) => ({
+            source: it.source, payload: it.payload, user_id: it.user_id,
+            ...(it.plan_name ? { plan_name: it.plan_name } : {}),
+          })),
+        };
+        const { ok, status, json } = await postJson(`${base}/v1/tools/import_financial_data_batch`, args.token, body);
+        if (!ok || !Array.isArray(json?.results)) {
+          const error = json?.error ?? { code: `HTTP_${status}`, message: `batch call returned ${status}` };
+          for (const item of chunk) record(item, { ok: false, error });
+        } else {
+          for (const r of json.results) {
+            const item = chunk[r.index];
+            if (!item) continue;
+            if (r.ok) recordOk(item, r);
+            else record(item, { ok: false, error: r.error ?? { code: 'ERROR', message: 'item failed' } });
+          }
+        }
+      }
+    } catch (e) {
+      // Network-level failure: every item in the chunk is recorded + resumable.
+      for (const item of chunk) {
+        record(item, { ok: false, error: { code: 'NETWORK', message: String(e.message ?? e).slice(0, 300) } });
+      }
+    }
+    // Persist progress after EVERY chunk so a crash/ctrl-C resumes cleanly.
+    saveManifest(manifestPath, manifest);
+  });
+
+  saveManifest(manifestPath, manifest);
+
+  const rows = Object.entries(manifest.items);
+  const failed = rows.filter(([, r]) => !r.ok).length;
+  if (args.json) {
+    const rollup = {};
+    for (const [, r] of rows) if (r.ok) for (const n of r.needs_input ?? []) rollup[n.field] = (rollup[n.field] ?? 0) + 1;
+    process.stdout.write(JSON.stringify({
+      summary: { total: all.length, ok: rows.length - failed, failed, skipped },
+      needs_input_rollup: rollup,
+      manifest: manifestPath,
+      results: manifest.items,
+    }, null, 2) + '\n');
+  } else {
+    printBatchReport(manifest, { skipped });
+    process.stdout.write(dim(`  manifest/results: ${manifestPath} — re-running skips the ${rows.length - failed} ok item(s)\n`));
+  }
+  if (failed > 0) process.exit(1);
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
 if (args.help || command === 'help' || command === '--help' || command === '-h') { process.stdout.write(USAGE); process.exit(0); }
 
-const commands = { demo: cmdDemo, validate: cmdValidate, plan: cmdPlan };
+const commands = { demo: cmdDemo, validate: cmdValidate, plan: cmdPlan, batch: cmdBatch };
 if (!command || !commands[command]) fail(2, command ? `Unknown command: ${command}` : 'No command given');
 
 commands[command](args).catch((e) => {

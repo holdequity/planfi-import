@@ -53,6 +53,15 @@ export function toPlanfiPlan(cfp, opts = {}) {
   const accounts = Array.isArray(cfp?.accounts) ? cfp.accounts : [];
   const owner = cfp?.owner ?? {};
 
+  // Zero recognized accounts is almost always a payload-shape problem, not a
+  // customer with no money — say so loudly. At batch scale (5k rows) this is
+  // the difference between "ok: 5000" hiding a systematic export-format error
+  // and a rollup line that names it.
+  if (accounts.length === 0) {
+    warnings.push(warning('IMPORT_EMPTY', 'warn',
+      `No accounts recognized in the ${cfp?.source ?? 'unknown'} payload — check the payload shape/format; the plan carries no imported balances.`));
+  }
+
   const sumBy = (pred, val = (a) => a.balance) =>
     accounts.filter(pred).reduce((n, a) => n + money(val(a)), 0);
 

@@ -165,6 +165,7 @@ append-only** — switch on them; the human `message` may improve between versio
 | `DEBT_RATE_MISSING` | warn | Debt modeled at 0% APR → supply the rate via the `debt_rate` ask |
 | `CSV_UNMAPPED_COLUMNS` | warn | CSV columns matched no dialect mapping; named in the message → rename headers or accept the best-effort import |
 | `CSV_TRANSACTIONS_ONLY` | warn | The file's tool (e.g. YNAB) structurally exports no account balances → pair it with a balances file or collect balances from the user |
+| `IMPORT_EMPTY` | warn | Zero accounts recognized in the payload — almost always a format/shape problem. At batch scale, a systematic export error shows up as this code in the rollup instead of hiding behind ok-counts. |
 
 ## Limitations (honest)
 
@@ -256,6 +257,7 @@ npx planfi-import validate accounts.csv --source csv          # your files, stru
 npx planfi-import validate statement.ofx --source ofx --json  # machine-readable output
 npx planfi-import validate payload.json --source plaid        # API-shaped sources take one .json
 npx planfi-import plan accounts.csv --source csv --token pft_… [--user-id u123]  # create a REAL plan
+npx planfi-import batch ./payloads --source plaid --token pft_…  # bulk-load THOUSANDS of customers
 ```
 
 - `demo` prints the plan + warnings + needsInput for a bundled fixture (colors only on a TTY).
@@ -265,6 +267,22 @@ npx planfi-import plan accounts.csv --source csv --token pft_… [--user-id u123
   `plan_id`. `--base` overrides the API host. `--user-id <id>` is sent as the `X-Planfi-User-Id`
   header: the API token identifies your (partner) tenant, while `X-Planfi-User-Id` attributes the
   plan and its usage to a specific end user within that tenant — optional, partner-supplied.
+- `batch` drives the managed `import_financial_data_batch` endpoint (25 items per call) over a
+  directory of `<user_id>.json` payload files (**filename stem = `user_id`**) or an `.ndjson`
+  file with `{"user_id", "payload"[, "plan_name", "source"]}` per line. Every item carries its
+  own `user_id`, and **(your account, `user_id`) is a stable upsert identity** — re-importing a
+  customer *updates* their plan (same `plan_id`) instead of duplicating it, so the whole run is
+  **safe to re-run**. 5,000 customers = 200 requests; `--concurrency 4` (default) finishes in
+  ~10 minutes at typical latencies.
+  - Writes a **resume manifest / results file** next to the input
+    (`<input>.planfi-manifest.json`, or `--resume <path>`): per-customer `ok` / `plan_id` /
+    `updated` / `error`, plus **full `needsInput` objects** (`field`, `label`, `accountId`) for
+    building collection worklists. A re-run skips customers already imported ok.
+  - **Partial failure never stops the run** — a malformed file or a rejected payload is recorded
+    and the rest continue. The final report prints ok/failed counts plus the missing-data rollup
+    (needsInput field → customers). Exit 0 all-ok, 1 if any item failed.
+  - `--batch-size N` (≤ 25) tunes items per call; `--single` sends one `import_financial_data`
+    call per item instead of the batch endpoint.
 - `--json` on every command for machine output; unknown commands/flags print help and exit 2.
 
 ## Testing

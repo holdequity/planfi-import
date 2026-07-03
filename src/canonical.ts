@@ -39,7 +39,8 @@ export type WarningCode =
   | 'NEGATIVE_BALANCE_CLAMPED'    // negative asset balance clamped to $0
   | 'DEBT_RATE_MISSING'           // debt has no APR in source → modeled at 0%
   | 'CSV_UNMAPPED_COLUMNS'        // CSV columns not matched by any dialect → best-effort generic mapping
-  | 'CSV_TRANSACTIONS_ONLY';      // transactions-only export (e.g. YNAB) — the tool carries no balances; pair with a balances file
+  | 'CSV_TRANSACTIONS_ONLY'       // transactions-only export (e.g. YNAB) — the tool carries no balances — pair with a balances file
+  | 'IMPORT_EMPTY';               // zero accounts recognized in the payload — likely a format/shape problem — the plan was built from nothing
 
 /** One structured warning. Emitted by adapters (via CFP meta) and the mapper. */
 export interface ImportWarning {

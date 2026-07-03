@@ -1,6 +1,6 @@
 {
   "name": "planfi-import",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Import customer financial data from aggregators (Plaid, MX, Finicity, FDX) or CSV/OFX files into Planfi plans via a canonical model.",
   "type": "module",
   "license": "MIT",

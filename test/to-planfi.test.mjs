@@ -265,3 +265,12 @@ test('importToPlan one-call wrapper returns plan + cfp + warnings', () => {
 test('unknown source throws', () => {
   assert.throws(() => importToPlan('nope', {}), /No import adapter/);
 });
+
+test('IMPORT_EMPTY: zero recognized accounts warns loudly (batch-scale format-error visibility)', () => {
+  const { warnings } = toPlanfiPlan({ source: 'plaid', accounts: [], owner: {}, meta: { warnings: [] } });
+  const w = warnings.find((x) => x.code === 'IMPORT_EMPTY');
+  assert.ok(w, 'IMPORT_EMPTY emitted');
+  assert.equal(w.severity, 'warn');
+  const ok = toPlanfiPlan({ source: 'plaid', accounts: [{ id: 'a', class: 'depository', subtype: 'checking', taxTreatment: 'na', balance: 100 }], owner: {}, meta: { warnings: [] } });
+  assert.ok(!ok.warnings.find((x) => x.code === 'IMPORT_EMPTY'), 'not emitted when accounts exist');
+});
