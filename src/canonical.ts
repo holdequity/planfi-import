@@ -29,7 +29,8 @@ export type WarningCode =
   | 'HOME_VALUE_ESTIMATED'        // no property value in source → estimated at 80% LTV
   | 'MORTGAGE_SKIPPED'            // mortgage had no balance or home value → dropped
   | 'NEGATIVE_BALANCE_CLAMPED'    // negative asset balance clamped to $0
-  | 'DEBT_RATE_MISSING';          // debt has no APR in source → modeled at 0%
+  | 'DEBT_RATE_MISSING'           // debt has no APR in source → modeled at 0%
+  | 'CSV_UNMAPPED_COLUMNS';       // CSV columns not matched by any dialect → best-effort generic mapping
 
 /** One structured warning. Emitted by adapters (via CFP meta) and the mapper. */
 export interface ImportWarning {

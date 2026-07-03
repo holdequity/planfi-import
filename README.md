@@ -5,8 +5,9 @@
 ![node >= 18](https://img.shields.io/badge/node-%E2%89%A5%2018-blue)
 ![license MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
-**Turn a raw data dump from a bank-account aggregator (Plaid, MX, or Finicity) into a
-[planfi](https://api.planfi.app) financial plan — one function call, zero runtime dependencies.**
+**Turn raw financial data — an aggregator dump (Plaid, MX, Finicity) or the CSV/OFX files a user
+can download from any bank — into a [planfi](https://api.planfi.app) financial plan.
+One function call, zero runtime dependencies. Ships a CLI.**
 
 You don't need to know Plaid or planfi to use this. An *aggregator* is a service that, with a
 customer's permission, fetches their real bank/brokerage/loan data as JSON. *planfi* is a financial
@@ -15,10 +16,11 @@ projection engine with a public API: you POST a plan (balances, salaries, debts�
 This package is the bridge between the two.
 
 ```
-Plaid ───┐
-MX ──────┼─ adapter.normalize() ─► Canonical Financial ─ toPlanfiPlan() ─► wire body ─ POST ─► plan_id
-Finicity ┘   (vocabulary only)      Profile (CFP)          (all domain          (generate_
-                                                            logic, once)         financial_plan)
+Plaid ────┐
+MX ───────┤
+Finicity ─┼─ adapter.normalize() ─► Canonical Financial ─ toPlanfiPlan() ─► wire body ─ POST ─► plan_id
+CSV files ┤   (vocabulary only)      Profile (CFP)          (all domain          (generate_
+OFX files ┘                                                  logic, once)         financial_plan)
 ```
 
 Adapters translate each provider's vocabulary into one canonical model; a single shared mapper does
@@ -86,6 +88,7 @@ became a living financial plan.
 
 For MX: `importToPlan('mx', { accounts, holdings, transactions, owner, asOf })`.
 For Finicity: `importToPlan('finicity', { accounts, positions, transactions, owner, asOf })`.
+No aggregator at all? See [Keyless import (CSV / OFX)](#keyless-import-csv--ofx) and the [CLI](#cli).
 Each adapter's file header documents exactly which provider endpoints feed each key.
 `owner` is your onboarding data (ages, goals — see [needsInput](#what-imports-vs-what-you-must-collect)).
 
@@ -154,6 +157,7 @@ append-only** — switch on them; the human `message` may improve between versio
 | `MORTGAGE_SKIPPED` | warn | Mortgage had no balance or value; dropped → check the source record |
 | `NEGATIVE_BALANCE_CLAMPED` | warn | Negative *asset* balance clamped to $0 → check for margin/overdraft |
 | `DEBT_RATE_MISSING` | warn | Debt modeled at 0% APR → supply the rate via the `debt_rate` ask |
+| `CSV_UNMAPPED_COLUMNS` | warn | CSV columns matched no dialect mapping; named in the message → rename headers or accept the best-effort import |
 
 ## Limitations (honest)
 
@@ -171,6 +175,11 @@ append-only** — switch on them; the human `message` may improve between versio
   Sanity checks (salary %, IRS limits) warn, not fix.
 - **A defined-benefit pension "balance"** is bucketed as a traditional account, low confidence — a
   coarse stand-in for an income stream.
+- **Keyless formats guess account types.** CSV positions exports and OFX carry no tax-treatment
+  vocabulary — types come from a CSV Type column when present, else the account NAME, else default
+  to taxable; every guess is a `CLASSIFICATION_GUESSED` warning. OFX cost basis doesn't exist in
+  the format; OFX 401(k)-specific records (`INV401K`) and CSV non-US number formats (`1.234,56`)
+  are not parsed.
 
 ## Adapters
 
@@ -179,13 +188,73 @@ append-only** — switch on them; the human `message` may improve between versio
 | Plaid | `'plaid'` | accounts + holdings + liabilities + income + investment transactions |
 | MX | `'mx'` | accounts + holdings + transactions; `PROPERTY` gives real home values |
 | Finicity (Mastercard Open Banking) | `'finicity'` | accounts + positions + transactions; epoch-second dates handled |
-| OFX / CSV | — | planned |
+| CSV files | `'csv'` | keyless; dialect table for Fidelity/Schwab/Vanguard positions + generic accounts/transactions layouts |
+| OFX files | `'ofx'` | keyless; OFX 1.x SGML and 2.x XML; bank + card + investment message sets |
+
+### Keyless import (CSV / OFX)
+
+No aggregator contract? Every US bank and brokerage still offers **Download → CSV** and most offer
+**Download → Quicken (.ofx/.qfx)**. The `csv` and `ofx` adapters turn those files into the same
+canonical profile — same mapper, same warnings, same `needsInput` asks:
+
+```js
+import { importToPlan } from 'planfi-import';
+import { readFileSync } from 'node:fs';
+
+// CSV: any mix of files; the header fingerprint picks the dialect per file
+const { plan, warnings } = importToPlan('csv', {
+  files: [
+    { name: 'fidelity-positions.csv', content: readFileSync('fidelity-positions.csv', 'utf8') },
+    { name: 'accounts.csv', content: readFileSync('accounts.csv', 'utf8') },
+  ],
+  owner: { age: 39, retirementAge: 60, annualSalary: 165000 },
+});
+
+// OFX: one statement file (SGML or XML — both parse)
+importToPlan('ofx', { content: readFileSync('statement.ofx', 'utf8'), owner: { age: 45 } });
+```
+
+Recognized CSV dialects: **Fidelity positions** (Account Number/Account Name/Symbol/…/Cost Basis
+Total), **Schwab positions** (Symbol/Description/Qty/Price/Mkt Val/Cost Basis), **Vanguard
+downloads** (Account Number/Investment Name/Symbol/Shares/Share Price/Total Value), plus **generic
+accounts** (Account Name/Type/Balance + optional Interest Rate/Minimum Payment) and **generic
+transactions** (Account/Date/Amount/Description) layouts. Files matching no dialect import
+best-effort with a `CSV_UNMAPPED_COLUMNS` warning naming what was skipped. Money cells handle `$`,
+thousands commas, and accounting-style `(1,850.00)` negatives.
+
+Keyless honesty (both formats carry less signal than an API — the gaps are surfaced, not papered
+over): positions CSVs and OFX carry **no tax-treatment info**, so account types are guessed
+(from a Type column when present, else the account name) and every guess is a
+`CLASSIFICATION_GUESSED` warning; OFX reports **card balances negative** — normalized to positive
+amount owed; OFX positions carry **no cost basis** (noted, never fabricated); contribution
+inference uses the same growth-exclusion rules as every other adapter.
+
+## CLI
+
+The package ships a zero-dependency CLI (Node ≥ 18):
+
+```bash
+npx planfi-import demo --source csv          # run a bundled sandbox fixture, no network
+npx planfi-import validate accounts.csv --source csv          # your files, structured diagnostics
+npx planfi-import validate statement.ofx --source ofx --json  # machine-readable output
+npx planfi-import validate payload.json --source plaid        # API-shaped sources take one .json
+npx planfi-import plan accounts.csv --source csv --token pft_… [--user-id u123]  # create a REAL plan
+```
+
+- `demo` prints the plan + warnings + needsInput for a bundled fixture (colors only on a TTY).
+- `validate` runs `importToPlan` on your payload and exits **0 even with warnings** (they are
+  diagnostics, not failures); a hard failure (unreadable file, bad JSON, unknown source) exits 1.
+- `plan` POSTs the emitted body to `POST /v1/tools/generate_financial_plan` and prints the
+  `plan_id`. `--base` overrides the API host. `--user-id <id>` is sent as the `X-Planfi-User-Id`
+  header: the API token identifies your (partner) tenant, while `X-Planfi-User-Id` attributes the
+  plan and its usage to a specific end user within that tenant — optional, partner-supplied.
+- `--json` on every command for machine output; unknown commands/flags print help and exit 2.
 
 ## Testing
 
 ```bash
 npm install   # dev deps for the conformance test only — runtime stays zero-dep
-npm test      # node --test: fixtures, fuzz (3×3000 randomized payloads), wire conformance
+npm test      # node --test: fixtures, CLI spawns, fuzz (5×3000 randomized/hostile payloads), wire conformance
 npm run demo  # print the full ImportResult built from the Plaid sandbox fixture
 ```
 

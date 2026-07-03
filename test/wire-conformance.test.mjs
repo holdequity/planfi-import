@@ -30,6 +30,8 @@ import { importToPlan } from '../src/index.mjs';
 import { plaidRaw } from '../fixtures/plaid-sandbox.mjs';
 import { mxRaw } from '../fixtures/mx-sandbox.mjs';
 import { finicityRaw } from '../fixtures/finicity-sandbox.mjs';
+import { csvRaw } from '../fixtures/csv-sandbox.mjs';
+import { ofxRaw } from '../fixtures/ofx-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAPPER_PATH = path.resolve(__dirname, '../../workers/ai-mcp/src/lib/mapper.ts');
@@ -48,6 +50,8 @@ const FIXTURES = [
   ['plaid', plaidRaw],
   ['mx', mxRaw],
   ['finicity', finicityRaw],
+  ['csv', csvRaw],
+  ['ofx', ofxRaw],
 ];
 
 /**

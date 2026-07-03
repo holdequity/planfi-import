@@ -1,10 +1,13 @@
 {
   "name": "planfi-import",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Import customer financial data from aggregators (Plaid, MX, Finicity) into Planfi plans via a canonical model.",
   "type": "module",
   "license": "MIT",
   "types": "./planfi-import.d.ts",
+  "bin": {
+    "planfi-import": "./bin/planfi-import.mjs"
+  },
   "exports": {
     ".": {
       "types": "./planfi-import.d.ts",
@@ -13,16 +16,39 @@
     "./canonical": "./src/canonical.ts",
     "./fixtures/*": "./fixtures/*"
   },
-  "files": ["src", "fixtures", "planfi-import.d.ts", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": [
+    "src",
+    "bin",
+    "fixtures",
+    "planfi-import.d.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test",
     "demo": "node -e \"import('./src/index.mjs').then(async({importToPlan})=>{const{plaidRaw}=await import('./fixtures/plaid-sandbox.mjs');console.log(JSON.stringify(importToPlan('plaid',plaidRaw),null,2))})\""
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "tsx": "^4.19.0",
     "zod": "^4.3.5"
   },
-  "keywords": ["planfi", "plaid", "mx", "finicity", "mastercard-open-banking", "aggregator", "financial-data", "import", "adapter"],
-  "repository": { "type": "git", "url": "https://github.com/holdequity/planfi-import" }
+  "keywords": [
+    "planfi",
+    "plaid",
+    "mx",
+    "finicity",
+    "mastercard-open-banking",
+    "aggregator",
+    "financial-data",
+    "import",
+    "adapter"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/holdequity/planfi-import"
+  }
 }

@@ -90,7 +90,8 @@ export type WarningCode =
   | 'HOME_VALUE_ESTIMATED'
   | 'MORTGAGE_SKIPPED'
   | 'NEGATIVE_BALANCE_CLAMPED'
-  | 'DEBT_RATE_MISSING';
+  | 'DEBT_RATE_MISSING'
+  | 'CSV_UNMAPPED_COLUMNS';
 
 export interface ImportWarning {
   code: WarningCode;
@@ -203,7 +204,7 @@ export interface ToPlanfiOptions {
  * @throws if `source` is not a registered adapter id.
  */
 export function importToPlan(
-  source: 'plaid' | 'mx' | 'finicity' | (string & {}),
+  source: 'plaid' | 'mx' | 'finicity' | 'csv' | 'ofx' | (string & {}),
   raw: object,
   opts?: ToPlanfiOptions,
 ): ImportResult;
@@ -238,6 +239,21 @@ export function contributionsByAccount(
 export declare const plaidAdapter: SourceAdapter<object>;
 export declare const mxAdapter: SourceAdapter<object>;
 export declare const finicityAdapter: SourceAdapter<object>;
+
+/** One CSV file handed to the csv adapter (the keyless path). */
+export interface CsvFile {
+  /** Used in warnings and as the fallback account name (Schwab positions). */
+  name?: string;
+  /** Force the mapping; omitted → the header fingerprint decides. */
+  kind?: 'accounts' | 'holdings' | 'transactions';
+  content: string;
+}
+
+/** CSV exports → CFP. Raw shape: { files: CsvFile[], owner?, asOf? }. */
+export declare const csvAdapter: SourceAdapter<{ files: CsvFile[]; owner?: OwnerContext; asOf?: string }>;
+
+/** OFX 1.x (SGML) / 2.x (XML) → CFP. Raw shape: { content: string, owner?, asOf? }. */
+export declare const ofxAdapter: SourceAdapter<{ content: string; owner?: OwnerContext; asOf?: string }>;
 
 /** Registry of source adapters by id. */
 export declare const ADAPTERS: Record<string, SourceAdapter<object>>;
