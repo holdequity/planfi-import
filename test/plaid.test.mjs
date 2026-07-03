@@ -22,6 +22,19 @@ test('classify: unknown investment subtype is taxable but low confidence', () =>
   assert.equal(c.confidence, 'low');
 });
 
+test('classify: ambiguous subtypes surface as low confidence (→ warning)', () => {
+  // 'non-taxable brokerage' must NOT be claimed as taxable at high confidence
+  // by the 'brokerage' substring.
+  const ntb = classify('investment', 'non-taxable brokerage');
+  assert.equal(ntb.taxTreatment, 'taxable');
+  assert.equal(ntb.confidence, 'low');
+  // A defined-benefit pension is an income stream, not an investable balance —
+  // bucketing it as traditional is a guess that must surface.
+  const pension = classify('investment', 'pension');
+  assert.equal(pension.taxTreatment, 'traditional');
+  assert.equal(pension.confidence, 'low');
+});
+
 test('classifyAsset maps security types', () => {
   assert.equal(classifyAsset('etf'), 'etf');
   assert.equal(classifyAsset('equity'), 'equity');
@@ -53,10 +66,18 @@ test('plaid adapter preserves ticker + cost basis on holdings', () => {
   assert.equal(btc.costBasis, undefined); // null cost basis → undefined, not fabricated
 });
 
-test('plaid adapter warns on missing cost basis and guessed classification', () => {
+test('plaid adapter warns on missing cost basis and guessed classification (structured codes)', () => {
   const cfp = plaidAdapter.normalize(plaidRaw);
-  assert.ok(cfp.meta.warnings.some((w) => /no cost basis/i.test(w)));
-  assert.ok(cfp.meta.warnings.some((w) => /classification guessed/i.test(w)));
+  const basis = cfp.meta.warnings.find((w) => w.code === 'NO_COST_BASIS');
+  assert.ok(basis, 'NO_COST_BASIS warning expected');
+  assert.equal(basis.severity, 'info');
+  assert.equal(basis.accountId, 'brk1'); // the null-basis BTC holding lives in brk1
+  assert.match(basis.message, /no cost basis/i);
+  const guessed = cfp.meta.warnings.find((w) => w.code === 'CLASSIFICATION_GUESSED');
+  assert.ok(guessed, 'CLASSIFICATION_GUESSED warning expected');
+  assert.equal(guessed.severity, 'warn');
+  assert.equal(guessed.accountId, 'weird1'); // the 'annuity' subtype
+  assert.match(guessed.message, /classification guessed/i);
 });
 
 test('plaid adapter maps liability detail (rate as fraction, min payment)', () => {
@@ -72,4 +93,14 @@ test('plaid Income supplies annualSalary when present', () => {
   const withIncome = { ...plaidRaw, owner: {}, income: { income_streams: [{ monthly_income: 12000 }] } };
   const cfp = plaidAdapter.normalize(withIncome);
   assert.equal(cfp.owner.annualSalary, 144000);
+});
+
+test('missing asOf defaults to NOW, not the 1970 epoch (mortgage-term regression)', () => {
+  const noAsOf = plaidAdapter.normalize({ ...plaidRaw, asOf: undefined });
+  assert.ok(Math.abs(Date.parse(noAsOf.asOf) - Date.now()) < 60_000, 'asOf should default to the current time');
+  // maturity 2052-06: months remaining must be measured from now (~26y),
+  // not from 1970 (~82y).
+  const mtg = noAsOf.accounts.find((a) => a.id === 'mtg1');
+  const years = mtg.liability.monthsRemaining / 12;
+  assert.ok(years > 10 && years < 40, `years remaining ${years} should be ~26, not ~82`);
 });

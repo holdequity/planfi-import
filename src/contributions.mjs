@@ -6,8 +6,16 @@
 // transfers-in / payroll) over the observed window, then divide by the window
 // length in months. Sign-agnostic (uses magnitude) to survive Plaid's debit/
 // credit convention differences across products. Conservative: unknown → 0.
+//
+// Deliberately EXCLUDED: dividend/interest — that is investment GROWTH, already
+// modeled by the plan's annual_return; counting it as a contribution would
+// double-count it. Transfers ARE counted (a recurring ACH transfer-in is the
+// most common real savings pattern), which means one-off rollovers can inflate
+// the figure — the shared mapper (to-planfi.mjs) sanity-checks the inferred
+// totals (vs known salary / IRS limits) and warns when they look inflated.
 
-const IN_SUBTYPE = /contribution|deposit|transfer|payroll|dividend|interest/i;
+const IN_SUBTYPE = /contribution|deposit|transfer|payroll/i;
+const GROWTH_SUBTYPE = /dividend|interest/i;
 
 /**
  * @param {Array<{account_id?:string, type?:string, subtype?:string, amount?:number, date?:string}>} txns
@@ -37,9 +45,10 @@ export function contributionsByAccount(txns, opts = {}) {
   return out;
 }
 
-/** A transaction that represents money entering the account. */
+/** A transaction that represents NEW money entering the account (not growth). */
 function isInflow(t) {
   const sub = String(t?.subtype ?? '');
+  if (GROWTH_SUBTYPE.test(sub)) return false; // dividends/interest = growth, not savings
   if (IN_SUBTYPE.test(sub)) return true;
   // Plaid credits cash into the account as a negative `amount` on a 'cash' type.
   return String(t?.type ?? '') === 'cash' && Number(t?.amount) < 0;

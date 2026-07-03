@@ -17,6 +17,12 @@
 
 import { classify, classifyAsset } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
+import { arr, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
+
+// MX credit-transaction categories/descriptions that are savings INFLOWS
+// (counted) vs investment GROWTH (excluded — already modeled by annual_return).
+const MX_INFLOW = /transfer|deposit|contribution|payroll|direct dep/i;
+const MX_GROWTH = /dividend|interest|capital gain|reinvest/i;
 
 // MX top-level `type` → generic { type, subtype? } that classify() consumes.
 const MX_TYPE = {
@@ -47,12 +53,25 @@ export const mxAdapter = {
     const accountsIn = arr(raw.accounts);
     const holdingsByAccount = groupBy(arr(raw.holdings), (h) => h.account_guid);
 
-    // Contributions: MX CREDITs into investment accounts are inflows. Normalize
-    // to the shape contributions.mjs expects and reuse the same inference.
+    // Contributions: MX CREDITs into investment accounts are candidate inflows.
+    // Filter by category/description so growth (dividends/interest/reinvest)
+    // isn't double-counted as savings; when a credit carries NO category or
+    // description we count it but warn once that the inference is coarse.
     const invGuids = new Set(accountsIn.filter((a) => up(a.type) === 'INVESTMENT').map((a) => a.guid));
+    let sawUnlabeledCredit = false;
     const normTxns = arr(raw.transactions)
-      .filter((t) => invGuids.has(t.account_guid) && up(t.type) === 'CREDIT')
+      .filter((t) => {
+        if (!invGuids.has(t.account_guid) || up(t.type) !== 'CREDIT') return false;
+        const label = `${t.category ?? ''} ${t.description ?? ''} ${t.top_level_category ?? ''}`.trim();
+        if (!label) { sawUnlabeledCredit = true; return true; } // no signal → coarse include
+        if (MX_GROWTH.test(label)) return false;                // dividends/interest = growth
+        return MX_INFLOW.test(label);                           // labeled but neither → exclude
+      })
       .map((t) => ({ account_id: t.account_guid, subtype: 'contribution', amount: -Math.abs(num(t.amount)), date: t.date || t.transacted_at }));
+    if (sawUnlabeledCredit) {
+      warnings.push(warning('COARSE_INFERENCE', 'warn',
+        'MX contribution inference is coarse: some investment-account credits carry no category/description, so ALL such unlabeled credits were counted as contributions (may include dividends or rollovers). Verify inferred contribution rates.'));
+    }
     const contribByAccount = contributionsByAccount(normTxns);
 
     const accounts = accountsIn.map((a) => {
@@ -62,7 +81,8 @@ export const mxAdapter = {
       const { accountClass, taxTreatment, confidence } = classify(genType === 'property' ? 'investment' : genType, subtype);
       const cls = genType === 'property' ? 'property' : accountClass;
       if (confidence === 'low' && cls !== 'property') {
-        warnings.push(`MX account "${a.name ?? a.guid}" (${a.type}/${a.subtype ?? ''}) classification guessed → ${cls}/${taxTreatment}.`);
+        warnings.push(warning('CLASSIFICATION_GUESSED', 'warn',
+          `MX account "${a.name ?? a.guid}" (${a.type}/${a.subtype ?? ''}) classification guessed → ${cls}/${taxTreatment}.`, a.guid));
       }
 
       const acct = {
@@ -81,7 +101,10 @@ export const mxAdapter = {
       if (cls === 'investment') {
         const hs = holdingsByAccount.get(a.guid) ?? [];
         acct.holdings = hs.map((h) => {
-          if (h.cost_basis == null) warnings.push(`Holding ${h.symbol ?? h.description ?? h.guid} has no cost basis (MX did not report it).`);
+          if (h.cost_basis == null) {
+            warnings.push(warning('NO_COST_BASIS', 'info',
+              `Holding ${h.symbol ?? h.description ?? h.guid} has no cost basis (MX did not report it).`, a.guid));
+          }
           return {
             ticker: h.symbol ?? undefined,
             name: h.description ?? undefined,
@@ -106,7 +129,8 @@ export const mxAdapter = {
 
     return {
       source: 'mx',
-      asOf: raw.asOf || new Date(0).toISOString(),
+      // Default snapshot time is NOW (not the 1970 epoch — see util.mjs).
+      asOf: raw.asOf || defaultAsOf(),
       owner: { ...(raw.owner ?? {}) },
       accounts,
       meta: { warnings, unmapped },
@@ -115,10 +139,8 @@ export const mxAdapter = {
 };
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-const arr = (x) => (Array.isArray(x) ? x : []);
-const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
+// (arr/num/pct/groupBy/monthsBetween live in ../util.mjs, shared with plaid.mjs.)
 const up = (x) => String(x ?? '').trim().toUpperCase();
-const pct = (x) => (Number.isFinite(Number(x)) ? Number(x) / 100 : undefined);
 /** MX investment subtype enum → classify()-friendly words. */
 function mxSubtype(sub) {
   if (!sub) return undefined;
@@ -130,15 +152,4 @@ function inferLoanSubtype(name) {
   if (/auto|car|vehicle/.test(n)) return 'auto';
   if (/mortgage|home/.test(n)) return 'mortgage';
   return undefined;
-}
-function groupBy(list, key) {
-  const m = new Map();
-  for (const x of list) { const k = key(x); (m.get(k) ?? m.set(k, []).get(k)).push(x); }
-  return m;
-}
-function monthsBetween(fromIso, toIso) {
-  if (!toIso) return undefined;
-  const t = Date.parse(toIso); if (!Number.isFinite(t)) return undefined;
-  const f = Date.parse(fromIso || ''); const base = Number.isFinite(f) ? f : Date.parse('2026-01-01');
-  return Math.max(1, Math.round((t - base) / (1000 * 60 * 60 * 24 * 30.44)));
 }

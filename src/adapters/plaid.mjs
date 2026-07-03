@@ -13,6 +13,7 @@
 
 import { classify, classifyAsset } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
+import { arr, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
 
 /** @implements {SourceAdapter} */
 export const plaidAdapter = {
@@ -61,7 +62,8 @@ export const plaidAdapter = {
     const accounts = accountsIn.map((a) => {
       const { accountClass, taxTreatment, confidence } = classify(a.type, a.subtype);
       if (confidence === 'low') {
-        warnings.push(`Account "${a.name ?? a.account_id}" (${a.type}/${a.subtype}) classification guessed → ${accountClass}/${taxTreatment}.`);
+        warnings.push(warning('CLASSIFICATION_GUESSED', 'warn',
+          `Account "${a.name ?? a.account_id}" (${a.type}/${a.subtype}) classification guessed → ${accountClass}/${taxTreatment}.`, a.account_id));
       }
       const bal = a.balances ?? {};
       // asset accounts use `current`; liabilities also carry `current` = amount owed.
@@ -86,7 +88,10 @@ export const plaidAdapter = {
         const hs = holdingsByAccount.get(a.account_id) ?? [];
         acct.holdings = hs.map((h) => {
           const sec = secById.get(h.security_id) ?? {};
-          if (h.cost_basis == null) warnings.push(`Holding ${sec.ticker_symbol ?? sec.name ?? h.security_id} has no cost basis (institution did not report it).`);
+          if (h.cost_basis == null) {
+            warnings.push(warning('NO_COST_BASIS', 'info',
+              `Holding ${sec.ticker_symbol ?? sec.name ?? h.security_id} has no cost basis (institution did not report it).`, a.account_id));
+          }
           return {
             ticker: sec.ticker_symbol ?? undefined,
             name: sec.name ?? undefined,
@@ -110,7 +115,8 @@ export const plaidAdapter = {
 
     return {
       source: 'plaid',
-      asOf: raw.asOf || new Date(0).toISOString(),
+      // Default snapshot time is NOW (not the 1970 epoch — see util.mjs).
+      asOf: raw.asOf || defaultAsOf(),
       owner,
       accounts,
       meta: { warnings, unmapped },
@@ -119,22 +125,7 @@ export const plaidAdapter = {
 };
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-const arr = (x) => (Array.isArray(x) ? x : []);
-const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
-/** Plaid rates are percentages (6.25) → fraction (0.0625). */
-const pct = (x) => (Number.isFinite(Number(x)) ? Number(x) / 100 : undefined);
-function groupBy(list, key) {
-  const m = new Map();
-  for (const x of list) { const k = key(x); (m.get(k) ?? m.set(k, []).get(k)).push(x); }
-  return m;
-}
-function monthsBetween(fromIso, toIso) {
-  if (!toIso) return undefined;
-  const f = Date.parse(fromIso || ''); const t = Date.parse(toIso);
-  if (!Number.isFinite(t)) return undefined;
-  const base = Number.isFinite(f) ? f : Date.parse('2025-01-01');
-  return Math.max(1, Math.round((t - base) / (1000 * 60 * 60 * 24 * 30.44)));
-}
+// (arr/num/pct/groupBy/monthsBetween live in ../util.mjs, shared with mx.mjs.)
 /** Plaid Income: sum the primary income stream(s) to an annual figure. */
 function plaidAnnualIncome(income) {
   if (!income) return null;

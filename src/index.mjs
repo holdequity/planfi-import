@@ -6,19 +6,22 @@ export { inferMonthlyContribution, contributionsByAccount } from './contribution
 export { toPlanfiPlan } from './to-planfi.mjs';
 export { plaidAdapter } from './adapters/plaid.mjs';
 export { mxAdapter } from './adapters/mx.mjs';
+export { finicityAdapter } from './adapters/finicity.mjs';
 
 import { plaidAdapter } from './adapters/plaid.mjs';
 import { mxAdapter } from './adapters/mx.mjs';
+import { finicityAdapter } from './adapters/finicity.mjs';
 import { toPlanfiPlan } from './to-planfi.mjs';
 
 /** Registry of source adapters by id. Add ofx here as it lands. */
-export const ADAPTERS = { plaid: plaidAdapter, mx: mxAdapter };
+export const ADAPTERS = { plaid: plaidAdapter, mx: mxAdapter, finicity: finicityAdapter };
 
 /**
  * One-call import: raw provider payload → { plan, warnings, needsInput, cfp }.
- * @param {string} source - adapter id ('plaid')
+ * @param {string} source - adapter id ('plaid' | 'mx' | 'finicity')
  * @param {object} raw - provider-native payload
  * @param {object} [opts] - forwarded to toPlanfiPlan (e.g. defaultState)
+ * @returns {{ plan: object, warnings: import('./canonical').ImportWarning[], needsInput: import('./canonical').NeedsInput[], cfp: import('./canonical').CanonicalFinancialProfile }}
  */
 export function importToPlan(source, raw, opts) {
   const adapter = ADAPTERS[source];

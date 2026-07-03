@@ -12,6 +12,63 @@
 /** Broad account family, provider-independent. */
 export type AccountClass = 'depository' | 'investment' | 'loan' | 'credit' | 'property';
 
+/**
+ * Stable machine-readable warning codes (v0.2.0). Codes are append-only: a
+ * released code never changes meaning, so callers can switch on them safely.
+ * Human `message` text may improve between versions; `code` will not.
+ */
+export type WarningCode =
+  | 'CLASSIFICATION_GUESSED'      // account type/subtype ambiguous → treatment guessed
+  | 'NO_COST_BASIS'               // institution reported a holding without cost basis
+  | 'COARSE_INFERENCE'            // contribution inference ran on unlabeled transactions
+  | 'CONTRIBUTION_CLAMPED'        // inferred contribution exceeded the IRS limit → clamped
+  | 'CONTRIBUTION_IMPLAUSIBLE'    // inferred savings rate implausibly high vs known salary
+  | 'HSA_FOLDED_INTO_PORTFOLIO'   // HSA balance folded into stocks total (no wire HSA balance field)
+  | 'HSA_COVERAGE_ASSUMED'        // HSA coverage type unknowable → assumed 'family'
+  | 'IRA_SPLIT_ASSUMED'           // trad+Roth IRA contributions → one 'both' block (engine models 50/50)
+  | 'HOME_VALUE_ESTIMATED'        // no property value in source → estimated at 80% LTV
+  | 'MORTGAGE_SKIPPED'            // mortgage had no balance or home value → dropped
+  | 'NEGATIVE_BALANCE_CLAMPED'    // negative asset balance clamped to $0
+  | 'DEBT_RATE_MISSING';          // debt has no APR in source → modeled at 0%
+
+/** One structured warning. Emitted by adapters (via CFP meta) and the mapper. */
+export interface ImportWarning {
+  code: WarningCode;
+  /** 'info' = lossless modeling note; 'warn' = a value may be wrong — verify. */
+  severity: 'info' | 'warn';
+  /** Human-readable explanation, safe to show to an end user. */
+  message: string;
+  /** Provider account id the warning refers to, when account-scoped. */
+  accountId?: string;
+}
+
+/** Fields an aggregator cannot supply — collect them from the user. */
+export type NeedsInputField =
+  | 'age'
+  | 'retirement_age'
+  | 'annual_salary'
+  | 'desired_annual_spend'
+  | 'home_value'
+  | 'debt_rate';
+
+/**
+ * One structured ask. De-duplicated on (field, accountId, earnerIndex) and
+ * emitted in deterministic order (earner demographics, then per-account asks
+ * in account order, then plan-level goals).
+ */
+export interface NeedsInput {
+  field: NeedsInputField;
+  /** Provider account id, for account-scoped asks (home_value, debt_rate). */
+  accountId?: string;
+  accountName?: string;
+  /** 0-based earner index, for demographic asks in multi-earner households. */
+  earnerIndex?: number;
+  /** Short human label, ready for a form ("Home value for Home mortgage"). */
+  label: string;
+  /** One sentence: why the import couldn't supply this. */
+  why: string;
+}
+
 /** Tax treatment of an investment/holding bucket. `na` = not applicable (debt, cash). */
 export type TaxTreatment = 'taxable' | 'traditional' | 'roth' | 'hsa' | '529' | 'na';
 
@@ -85,8 +142,8 @@ export interface CanonicalFinancialProfile {
   owner: OwnerContext;
   accounts: CanonicalAccount[];
   meta: {
-    /** Human-readable notes: guessed classifications, dropped/partial data. */
-    warnings: string[];
+    /** Structured notes: guessed classifications, dropped/partial data. */
+    warnings: ImportWarning[];
     /** Raw provider entities that couldn't be mapped — never silently dropped. */
     unmapped: unknown[];
   };

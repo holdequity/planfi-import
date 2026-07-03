@@ -25,7 +25,9 @@ test('MX holdings carry ticker + cost basis; null basis warned', () => {
   const voo = brk.holdings.find((h) => h.ticker === 'VOO');
   assert.equal(voo.costBasis, 180000);
   assert.equal(voo.assetType, 'etf');
-  assert.ok(cfp.meta.warnings.some((w) => /no cost basis/i.test(w)));
+  const w = cfp.meta.warnings.find((x) => x.code === 'NO_COST_BASIS');
+  assert.ok(w && /no cost basis/i.test(w.message));
+  assert.equal(w.accountId, 'ACT-brk');
 });
 
 test('MX PROPERTY value pairs with the mortgage (no home_value needed)', () => {
@@ -33,19 +35,55 @@ test('MX PROPERTY value pairs with the mortgage (no home_value needed)', () => {
   assert.equal(plan.real_estate.length, 1);
   assert.equal(plan.real_estate[0].current_value, 1450000); // real market value, not a guess
   assert.equal(plan.real_estate[0].mortgage.balance, 610000);
-  assert.ok(!needsInput.some((n) => n.startsWith('home_value')));
+  assert.ok(!needsInput.some((n) => n.field === 'home_value'));
 });
 
-test('MX buckets + HSA asset + inferred contributions', () => {
-  const { plan } = toPlanfiPlan(cfp);
+test('MX buckets + portfolio total + inferred contributions', () => {
+  const { plan, warnings } = toPlanfiPlan(cfp);
   assert.equal(plan.account_balances.taxable, 305000);
   assert.equal(plan.account_balances.traditional, 420000);
   assert.equal(plan.account_balances.roth, 96000);
   assert.equal(plan.cash.current_value, 21000 + 65000);
-  assert.equal(plan.hsa_retirement.currentHsaBalance, 30000);
+  // stocks = TOTAL portfolio: taxable + traditional + roth + HSA balance
+  // (folded and warned — hsa_retirement is not a wire field).
+  assert.equal(plan.stocks.current_value, 305000 + 420000 + 96000 + 30000);
+  assert.equal(plan.hsa_retirement, undefined);
+  assert.ok(warnings.some((w) => w.code === 'HSA_FOLDED_INTO_PORTFOLIO' && /HSA balance \$30,000 .* aggregate portfolio/.test(w.message)));
   assert.ok(plan.stocks.monthly_contribution > 0);
   assert.ok(plan.earners[0].retirement_accounts.k401.employee_annual > 0);
-  assert.equal(plan.education_account.initial_balance, 52000);
+  // education_account is the ENGINE shape — camelCase inside.
+  assert.equal(plan.education_account.initialBalance, 52000);
+});
+
+test('MX 401(k) inference over the 2026 limit clamps + warns (fixture infers $25,920/yr)', () => {
+  const { plan, warnings } = toPlanfiPlan(cfp);
+  assert.equal(plan.earners[0].retirement_accounts.k401.employee_annual, 24500);
+  assert.ok(warnings.some((w) => w.code === 'CONTRIBUTION_CLAMPED' && /401\(k\) contribution .* exceeds the 2026 IRS limit/.test(w.message)));
+});
+
+test('MX growth credits (dividends/interest) are excluded from contribution inference', () => {
+  const withGrowth = {
+    ...mxRaw,
+    transactions: [
+      ...mxRaw.transactions,
+      ...['2026-01-20', '2026-02-20', '2026-03-20'].map((date) => (
+        { account_guid: 'ACT-brk', type: 'CREDIT', amount: 900, category: 'Dividend', date })),
+    ],
+  };
+  const a = mxAdapter.normalize(mxRaw).accounts.find((x) => x.id === 'ACT-brk');
+  const b = mxAdapter.normalize(withGrowth).accounts.find((x) => x.id === 'ACT-brk');
+  assert.equal(b.estMonthlyContribution, a.estMonthlyContribution, 'dividend credits must not inflate the inferred contribution');
+});
+
+test('MX unlabeled credits are counted but flagged as coarse inference', () => {
+  const unlabeled = {
+    ...mxRaw,
+    transactions: ['2026-01-20', '2026-02-20', '2026-03-20'].map((date) => (
+      { account_guid: 'ACT-brk', type: 'CREDIT', amount: 500, date })),
+  };
+  const norm = mxAdapter.normalize(unlabeled);
+  assert.ok(norm.meta.warnings.some((w) => w.code === 'COARSE_INFERENCE' && /MX contribution inference is coarse/.test(w.message)));
+  assert.ok(norm.accounts.find((x) => x.id === 'ACT-brk').estMonthlyContribution > 0);
 });
 
 test('MX loan + credit → debts; rate as fraction', () => {

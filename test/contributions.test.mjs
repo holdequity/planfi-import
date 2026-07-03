@@ -27,6 +27,23 @@ test('recognizes deposit/transfer/payroll subtypes', () => {
   assert.ok(inferMonthlyContribution(txns) > 0);
 });
 
+test('EXCLUDES dividends/interest — growth is not a contribution (double-count regression)', () => {
+  const growthOnly = [
+    { type: 'cash', subtype: 'dividend', amount: -500, date: '2026-01-01' },
+    { type: 'cash', subtype: 'interest', amount: -50, date: '2026-02-01' },
+    { type: 'cash', subtype: 'qualified dividend', amount: -500, date: '2026-03-01' },
+  ];
+  assert.equal(inferMonthlyContribution(growthOnly), 0);
+  // Mixed feed: only the real deposits count.
+  const mixed = [
+    ...growthOnly,
+    { subtype: 'deposit', amount: -1000, date: '2026-01-01' },
+    { subtype: 'deposit', amount: -1000, date: '2026-03-01' },
+  ];
+  const monthly = inferMonthlyContribution(mixed, { windowMonths: 2 });
+  assert.equal(monthly, 1000);
+});
+
 test('empty / single-point → 0 (no fabrication)', () => {
   assert.equal(inferMonthlyContribution([]), 0);
   assert.equal(inferMonthlyContribution(null), 0);
