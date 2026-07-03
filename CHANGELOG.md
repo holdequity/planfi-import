@@ -1,5 +1,8 @@
 # Changelog
 
+> **npm:** published as **`@plan-fi/imports`** (public, scoped to the `plan-fi` org) as of 0.6.0.
+
+
 All notable changes to `planfi-import`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).

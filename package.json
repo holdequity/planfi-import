@@ -1,5 +1,5 @@
 {
-  "name": "planfi-import",
+  "name": "@plan-fi/imports",
   "version": "0.6.0",
   "description": "Import customer financial data from aggregators (Plaid, MX, Finicity, FDX) or CSV/OFX files into Planfi plans via a canonical model.",
   "type": "module",
@@ -57,6 +57,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/holdequity/planfi-import"
+    "url": "git+https://github.com/holdequity/planfi-import.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/holdequity/planfi-import#readme",
+  "bugs": {
+    "url": "https://github.com/holdequity/planfi-import/issues"
   }
 }

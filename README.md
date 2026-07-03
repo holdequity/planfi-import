@@ -35,16 +35,16 @@ the guide.
 Install (not yet on npm — install from GitHub):
 
 ```bash
-npm install github:holdequity/planfi-import
+npm install @plan-fi/imports
 ```
 
 **1. Import.** Pass the merged responses from your aggregator's endpoints (a bundled sandbox
 fixture works out of the box if you don't have credentials yet):
 
 ```js
-import { importToPlan } from 'planfi-import';
+import { importToPlan } from '@plan-fi/imports';
 // No Plaid account? Use the bundled fixture: fixtures/plaid-sandbox.mjs
-import { plaidRaw } from 'planfi-import/fixtures/plaid-sandbox.mjs';
+import { plaidRaw } from '@plan-fi/imports/fixtures/plaid-sandbox.mjs';
 
 const { plan, warnings, needsInput } = importToPlan('plaid', plaidRaw);
 ```
@@ -69,8 +69,8 @@ trimmed):
 **2. Mint the plan.** POST it to the public planfi API:
 
 ```bash
-node -e "import('planfi-import').then(async ({ importToPlan }) => {
-  const { plaidRaw } = await import('planfi-import/fixtures/plaid-sandbox.mjs');
+node -e "import('@plan-fi/imports').then(async ({ importToPlan }) => {
+  const { plaidRaw } = await import('@plan-fi/imports/fixtures/plaid-sandbox.mjs');
   process.stdout.write(JSON.stringify(importToPlan('plaid', plaidRaw).plan));
 })" > plan.json
 
@@ -207,7 +207,7 @@ No aggregator contract? Every US bank and brokerage still offers **Download → 
 canonical profile — same mapper, same warnings, same `needsInput` asks:
 
 ```js
-import { importToPlan } from 'planfi-import';
+import { importToPlan } from '@plan-fi/imports';
 import { readFileSync } from 'node:fs';
 
 // CSV: any mix of files; the header fingerprint picks the dialect per file
@@ -252,12 +252,12 @@ inference uses the same growth-exclusion rules as every other adapter.
 The package ships a zero-dependency CLI (Node ≥ 18):
 
 ```bash
-npx planfi-import demo --source csv          # run a bundled sandbox fixture, no network
-npx planfi-import validate accounts.csv --source csv          # your files, structured diagnostics
-npx planfi-import validate statement.ofx --source ofx --json  # machine-readable output
-npx planfi-import validate payload.json --source plaid        # API-shaped sources take one .json
-npx planfi-import plan accounts.csv --source csv --token pft_… [--user-id u123]  # create a REAL plan
-npx planfi-import batch ./payloads --source plaid --token pft_…  # bulk-load THOUSANDS of customers
+npx @plan-fi/imports demo --source csv          # run a bundled sandbox fixture, no network
+npx @plan-fi/imports validate accounts.csv --source csv          # your files, structured diagnostics
+npx @plan-fi/imports validate statement.ofx --source ofx --json  # machine-readable output
+npx @plan-fi/imports validate payload.json --source plaid        # API-shaped sources take one .json
+npx @plan-fi/imports plan accounts.csv --source csv --token pft_… [--user-id u123]  # create a REAL plan
+npx @plan-fi/imports batch ./payloads --source plaid --token pft_…  # bulk-load THOUSANDS of customers
 ```
 
 - `demo` prints the plan + warnings + needsInput for a bundled fixture (colors only on a TTY).
