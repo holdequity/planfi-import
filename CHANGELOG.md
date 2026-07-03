@@ -4,7 +4,62 @@ All notable changes to `planfi-import`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
-## 0.3.0 — 2026-07-02 — targeting 0.3.0
+## [0.4.0] — 2026-07-02
+
+### Added
+
+- **FDX adapter** — `importToPlan('fdx', { accounts, holdings, transactions, owner, asOf })`
+  for the Financial Data Exchange standard (the US open-banking vocabulary named by the CFPB
+  §1033 rule; Akoya speaks it natively). Accepts FDX Account entities both WRAPPED in their
+  shape keys (`{ depositAccount: {…} }`, `{ investmentAccount }`, `{ loanAccount }`,
+  `{ locAccount }`, `{ lineOfCredit }`, `{ annuityAccount }`) and already flattened; the wrapper
+  key doubles as the fallback class signal for unknown `accountType` values. Maps the FDX
+  `accountType` enum (CHECKING/SAVINGS/CD/MONEYMARKET → depository; BROKERAGE/IRA/ROTH/ROTH401K/
+  401K/403B/457/529/HSA/KEOGH/SEPIRA/SIMPLEIRA → investment with matching tax treatment;
+  TDA/ANNUITY → traditional at low confidence, warned; MORTGAGE/HOMEEQUITYLOAN + LOAN/AUTOLOAN/
+  STUDENTLOAN/PERSONALLOAN → loans; CREDITCARD/LINEOFCREDIT → credit), InvestmentHolding
+  (holdingType/symbol/units/marketValue/costBasis — DIGITALASSET → speculative crypto; missing
+  cost basis never fabricated), and transactions with `debitCreditMemo` respected (DEBITs never
+  count as contributions). Liability balances are treated as positive amounts owed per FDX
+  conventions with an `|x|` defense; a depositAccount `interestRate` is a savings yield and never
+  becomes a debt APR. Ships with a two-earner sandbox fixture, a full test file, fuzz coverage
+  (wrapped AND flat entities), wire-conformance registration, and enum-alignment notes in
+  `canonical.ts`.
+- **Adapter-contract harness** — `test/adapter-contract.test.mjs`: one GENERIC suite that
+  discovers every adapter in `ADAPTERS` and runs the identical battery — (a) `normalize(fixture)`
+  yields a structurally valid CFP (new `test/helpers/validate-cfp.mjs` validator) clearing a
+  content floor, (b) `toPlanfiPlan` succeeds with every warning code from the append-only catalog
+  and every needsInput field from the enum (both PARSED out of `src/canonical.ts`, with
+  `planfi-import.d.ts` asserted to mirror them), (c) hostile inputs never throw
+  (null/undefined/primitives/null-member arrays + 60 deterministic scrambles of each adapter's
+  own fixture), (d) determinism (two identical runs → deep-equal), (e) every adapter has a
+  fixture registered for wire-conformance — the fixture list moved to
+  `test/helpers/fixture-registry.mjs`, shared by both suites so they cannot drift.
+- **AI-agent authoring docs** — `AGENTS.md` (repo purpose, the invariants as imperatives, exact
+  verify commands) and `docs/ADAPTER_GUIDE.md` (ships in the npm package): canonical-model
+  reference table, the adapter contract, classification cheat sheet, warning-code catalog with
+  when-to-emit rules, fixture requirements, registration checklist, and a self-verification
+  checklist whose checks are the contract harness. Plus `src/adapters/_template.mjs`, a fully
+  commented copy-me skeleton that emits an empty-but-valid CFP, is excluded from registration,
+  and is covered by a guide-consistency test.
+
+### Fixed
+
+_All three found by the new contract harness's hostile-input battery (the fuzz suite generated
+plausible payloads and never hit these):_
+
+- **Every adapter threw on `normalize(null)`** — the `raw = {}` default parameter only covers
+  `undefined`. All adapters now coerce non-object payloads to `{}` (a total function returns an
+  empty profile instead of `TypeError`).
+- **Plaid/MX/Finicity threw on `null` members inside provider arrays** (`accounts`, `holdings`,
+  `positions`, `transactions`, `liabilities.*`, income streams). New `objs()` helper in
+  `src/util.mjs` drops non-object members at every array boundary.
+- **Finicity threw `RangeError: Invalid time value`** on absurd epoch-second dates (beyond the
+  ECMAScript ±8.64e15 ms range) — `finDateIso` now returns `undefined` for out-of-range values.
+- **`toPlanfiPlan` threw on non-object members in a caller-supplied `owner.earners` array** —
+  they are now treated as empty earner contexts (their demographics surface as needsInput asks).
+
+## [0.3.0] — 2026-07-02
 
 ### Added
 

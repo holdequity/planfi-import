@@ -13,7 +13,7 @@
 
 import { classify, classifyAsset } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
-import { arr, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
+import { arr, objs, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
 
 /** @implements {SourceAdapter} */
 export const plaidAdapter = {
@@ -22,22 +22,26 @@ export const plaidAdapter = {
    * @param {object} raw - { accounts, holdings, securities, liabilities, income, owner, asOf }
    * @returns {CFP}
    */
-  normalize(raw = {}) {
+  normalize(raw) {
+    // Total function: null/primitive payloads normalize to an empty profile
+    // (a default parameter only covers `undefined` — the contract harness
+    // caught the null case throwing).
+    raw = raw && typeof raw === 'object' ? raw : {};
     const warnings = [];
     const unmapped = [];
-    const accountsIn = arr(raw.accounts);
-    const holdingsIn = arr(raw.holdings);
-    const securitiesIn = arr(raw.securities);
+    const accountsIn = objs(raw.accounts);
+    const holdingsIn = objs(raw.holdings);
+    const securitiesIn = objs(raw.securities);
     const liab = raw.liabilities ?? {};
 
     const secById = new Map(securitiesIn.map((s) => [s.security_id, s]));
     const holdingsByAccount = groupBy(holdingsIn, (h) => h.account_id);
     // Inferred monthly contributions from investment transactions (if provided).
-    const contribByAccount = contributionsByAccount(arr(raw.investmentTransactions ?? raw.investment_transactions));
+    const contribByAccount = contributionsByAccount(objs(raw.investmentTransactions ?? raw.investment_transactions));
 
     // liability detail keyed by account_id
     const liabByAccount = new Map();
-    for (const m of arr(liab.mortgage)) {
+    for (const m of objs(liab.mortgage)) {
       liabByAccount.set(m.account_id, {
         rate: pct(m.interest_rate?.percentage),
         minPayment: num(m.next_monthly_payment) || num(m.last_payment_amount),
@@ -46,13 +50,13 @@ export const plaidAdapter = {
         monthsRemaining: monthsBetween(raw.asOf, m.maturity_date),
       });
     }
-    for (const st of arr(liab.student)) {
+    for (const st of objs(liab.student)) {
       liabByAccount.set(st.account_id, {
         rate: pct(st.interest_rate_percentage),
         minPayment: num(st.minimum_payment_amount),
       });
     }
-    for (const cc of arr(liab.credit)) {
+    for (const cc of objs(liab.credit)) {
       liabByAccount.set(cc.account_id, {
         rate: pct(cc.aprs?.[0]?.apr_percentage),
         minPayment: num(cc.minimum_payment_amount) || num(cc.last_statement_balance) * 0.02,
@@ -129,7 +133,7 @@ export const plaidAdapter = {
 /** Plaid Income: sum the primary income stream(s) to an annual figure. */
 function plaidAnnualIncome(income) {
   if (!income) return null;
-  const streams = arr(income.income_streams ?? income.bank_income?.[0]?.income_sources);
+  const streams = objs(income.income_streams ?? income.bank_income?.[0]?.income_sources);
   if (!streams.length) return null;
   const monthly = streams.reduce((n, s) => n + num(s.monthly_income), 0);
   return monthly > 0 ? Math.round(monthly * 12) : null;

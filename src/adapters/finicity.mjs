@@ -40,7 +40,7 @@
 
 import { classify, classifyAsset } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
-import { arr, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
+import { arr, objs, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
 
 // Finicity credit categorization/labels that are savings INFLOWS (counted) vs
 // investment GROWTH (excluded — already modeled by annual_return). Same split
@@ -97,11 +97,15 @@ export const finicityAdapter = {
    * @param {object} raw - { accounts, positions, transactions, owner, asOf }
    * @returns {CFP}
    */
-  normalize(raw = {}) {
+  normalize(raw) {
+    // Total function: null/primitive payloads normalize to an empty profile
+    // (a default parameter only covers `undefined` — the contract harness
+    // caught the null case throwing).
+    raw = raw && typeof raw === 'object' ? raw : {};
     const warnings = [];
     const unmapped = [];
-    const accountsIn = arr(raw.accounts);
-    const positionsByAccount = groupBy(arr(raw.positions), (p) => p.accountId);
+    const accountsIn = objs(raw.accounts);
+    const positionsByAccount = groupBy(objs(raw.positions), (p) => p.accountId);
 
     // Contributions: deposits (positive amounts) into investment accounts are
     // candidate inflows. Finicity carries categorization on most transactions;
@@ -111,7 +115,7 @@ export const finicityAdapter = {
       .filter((a) => (finType(a.type) ?? ['investment'])[0] === 'investment')
       .map((a) => String(a.id)));
     let sawUnlabeledDeposit = false;
-    const normTxns = arr(raw.transactions)
+    const normTxns = objs(raw.transactions)
       .filter((t) => {
         if (!invIds.has(String(t.accountId)) || !(num(t.amount) > 0)) return false;
         const label = `${t.investmentTransactionType ?? ''} ${t.categorization?.category ?? ''} ${t.description ?? ''} ${t.memo ?? ''}`.trim();
@@ -218,7 +222,13 @@ const finType = (t) => (Object.hasOwn(FIN_TYPE, low(t)) ? FIN_TYPE[low(t)] : und
 function finDateIso(v) {
   if (v == null || v === '') return undefined;
   const n = Number(v);
-  if (Number.isFinite(n) && n > 0) return new Date(n * 1000).toISOString();
+  if (Number.isFinite(n) && n > 0) {
+    // Guard the ECMAScript date range (±8.64e15 ms): an absurd epoch value
+    // must yield undefined, not a thrown RangeError from toISOString()
+    // (caught by the contract harness's scrambled-fixture battery).
+    const ms = n * 1000;
+    return ms <= 8.64e15 ? new Date(ms).toISOString() : undefined;
+  }
   return Number.isFinite(Date.parse(v)) ? String(v) : undefined;
 }
 /** Same, but for transaction dates fed into contribution inference. */

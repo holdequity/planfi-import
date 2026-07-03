@@ -9,7 +9,15 @@
  *   CanonicalFinancialProfile  ──toPlanfiPlan()──►  generate_financial_plan wire
  */
 
-/** Broad account family, provider-independent. */
+/**
+ * Broad account family, provider-independent.
+ *
+ * Enum alignment: this maps 1:1 onto the FDX (Financial Data Exchange)
+ * account SHAPES — depositAccount → 'depository', investmentAccount /
+ * annuityAccount → 'investment', loanAccount → 'loan', locAccount /
+ * lineOfCredit → 'credit'. FDX has no property/real-estate shape, so
+ * 'property' has no FDX counterpart (it exists for MX PROPERTY accounts).
+ */
 export type AccountClass = 'depository' | 'investment' | 'loan' | 'credit' | 'property';
 
 /**
@@ -70,9 +78,23 @@ export interface NeedsInput {
   why: string;
 }
 
-/** Tax treatment of an investment/holding bucket. `na` = not applicable (debt, cash). */
+/**
+ * Tax treatment of an investment/holding bucket. `na` = not applicable (debt, cash).
+ *
+ * Enum alignment: the FDX `accountType` vocabulary partitions cleanly into
+ * these treatments — IRA/401K/403B/457/KEOGH/SEPIRA/SIMPLEIRA → 'traditional',
+ * ROTH/ROTH401K → 'roth', HSA → 'hsa', 529 → '529', BROKERAGE → 'taxable';
+ * TDA/ANNUITY lean 'traditional' at low confidence (warned).
+ */
 export type TaxTreatment = 'taxable' | 'traditional' | 'roth' | 'hsa' | '529' | 'na';
 
+/**
+ * Enum alignment: FDX InvestmentHolding.holdingType overlaps — STOCK →
+ * 'equity', MUTUALFUND → 'mutual_fund', BOND → 'bond', CASH/CD/MONEYMARKET →
+ * 'cash', DIGITALASSET → 'crypto', OPTION/ANNUITY/OTHER → 'other'. 'etf' is
+ * finer-grained than FDX (which files ETFs under STOCK unless the institution
+ * sends an explicit ETF type, which the fdx adapter also accepts).
+ */
 export type AssetType = 'equity' | 'etf' | 'mutual_fund' | 'bond' | 'cash' | 'crypto' | 'other';
 
 /** One security position inside an investment account. */
@@ -136,7 +158,7 @@ export interface OwnerContext {
 }
 
 export interface CanonicalFinancialProfile {
-  /** Adapter source id: 'plaid' | 'mx' | 'ofx' | 'kaggle' | ... */
+  /** Adapter source id: 'plaid' | 'mx' | 'finicity' | 'fdx' | 'csv' | 'ofx' | ... */
   source: string;
   /** ISO timestamp of the underlying snapshot. */
   asOf: string;

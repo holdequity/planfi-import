@@ -94,7 +94,10 @@ export function toPlanfiPlan(cfp, opts = {}) {
   // ── earners (multi-owner) ──────────────────────────────────────────────────
   // Demographics/goals are things NO aggregator knows (they report balances,
   // not birthdays or retirement plans) — missing ones become structured asks.
-  const earnerCtx = Array.isArray(owner.earners) && owner.earners.length ? owner.earners : [owner];
+  // Non-object members in a caller-supplied earners array (null, junk) are
+  // treated as empty contexts, not crashes (caught by the contract harness).
+  const earnerCtx = (Array.isArray(owner.earners) && owner.earners.length ? owner.earners : [owner])
+    .map((e) => (e && typeof e === 'object' ? e : {}));
   const earners = earnerCtx.map((e, i) => {
     const name = e.name || (i === 0 ? 'Primary' : `Earner ${i + 1}`);
     const who = earnerCtx.length > 1 ? ` (${name})` : '';

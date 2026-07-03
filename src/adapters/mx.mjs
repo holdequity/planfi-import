@@ -17,7 +17,7 @@
 
 import { classify, classifyAsset } from '../classify.mjs';
 import { contributionsByAccount } from '../contributions.mjs';
-import { arr, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
+import { arr, objs, num, pct, groupBy, monthsBetween, defaultAsOf, warning } from '../util.mjs';
 
 // MX credit-transaction categories/descriptions that are savings INFLOWS
 // (counted) vs investment GROWTH (excluded — already modeled by annual_return).
@@ -47,11 +47,15 @@ export const mxAdapter = {
    * @param {object} raw - { accounts, holdings, transactions, owner, asOf }
    * @returns {CFP}
    */
-  normalize(raw = {}) {
+  normalize(raw) {
+    // Total function: null/primitive payloads normalize to an empty profile
+    // (a default parameter only covers `undefined` — the contract harness
+    // caught the null case throwing).
+    raw = raw && typeof raw === 'object' ? raw : {};
     const warnings = [];
     const unmapped = [];
-    const accountsIn = arr(raw.accounts);
-    const holdingsByAccount = groupBy(arr(raw.holdings), (h) => h.account_guid);
+    const accountsIn = objs(raw.accounts);
+    const holdingsByAccount = groupBy(objs(raw.holdings), (h) => h.account_guid);
 
     // Contributions: MX CREDITs into investment accounts are candidate inflows.
     // Filter by category/description so growth (dividends/interest/reinvest)
@@ -59,7 +63,7 @@ export const mxAdapter = {
     // description we count it but warn once that the inference is coarse.
     const invGuids = new Set(accountsIn.filter((a) => up(a.type) === 'INVESTMENT').map((a) => a.guid));
     let sawUnlabeledCredit = false;
-    const normTxns = arr(raw.transactions)
+    const normTxns = objs(raw.transactions)
       .filter((t) => {
         if (!invGuids.has(t.account_guid) || up(t.type) !== 'CREDIT') return false;
         const label = `${t.category ?? ''} ${t.description ?? ''} ${t.top_level_category ?? ''}`.trim();

@@ -7,6 +7,14 @@
 /** Coerce to an array (anything else → []). */
 export const arr = (x) => (Array.isArray(x) ? x : []);
 
+/**
+ * Coerce to an array of OBJECTS: non-arrays → [], and non-object members
+ * (null, numbers, strings) are dropped. Use this at every provider-array
+ * boundary — a null member in accounts[]/holdings[]/transactions[] must not
+ * crash an adapter (the contract harness feeds exactly that).
+ */
+export const objs = (x) => arr(x).filter((v) => v != null && typeof v === 'object');
+
 /** Coerce to a finite number (anything else → 0). Preserves sign. */
 export const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
 

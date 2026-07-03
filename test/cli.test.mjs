@@ -78,7 +78,7 @@ test('demo (default plaid) prints a human-readable plan and exits 0', async () =
 });
 
 test('demo --json emits the full machine-readable ImportResult for every source', async () => {
-  for (const source of ['plaid', 'mx', 'finicity', 'csv', 'ofx']) {
+  for (const source of ['plaid', 'mx', 'finicity', 'fdx', 'csv', 'ofx']) {
     const r = await cli(['demo', '--source', source, '--json']);
     assert.equal(r.code, 0, `${source}: ${r.stderr}`);
     const out = JSON.parse(r.stdout);
@@ -91,7 +91,7 @@ test('demo --json emits the full machine-readable ImportResult for every source'
 test('demo with an unknown source is a usage error (exit 2) naming the known ids', async () => {
   const r = await cli(['demo', '--source', 'quickbooks']);
   assert.equal(r.code, 2);
-  assert.match(r.stderr, /plaid.*mx.*finicity.*csv.*ofx/s);
+  assert.match(r.stderr, /plaid.*mx.*finicity.*fdx.*csv.*ofx/s);
 });
 
 // ── validate ─────────────────────────────────────────────────────────────────

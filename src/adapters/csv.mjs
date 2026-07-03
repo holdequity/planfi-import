@@ -161,7 +161,11 @@ export const csvAdapter = {
    * @param {object} raw - { files: [{name?, kind?, content}], owner, asOf }
    * @returns {CFP}
    */
-  normalize(raw = {}) {
+  normalize(raw) {
+    // Total function: null/primitive payloads normalize to an empty profile
+    // (a default parameter only covers `undefined` — the contract harness
+    // caught the null case throwing).
+    raw = raw && typeof raw === 'object' ? raw : {};
     const warnings = [];
     const unmapped = [];
     const accounts = [];

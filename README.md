@@ -5,8 +5,8 @@
 ![node >= 18](https://img.shields.io/badge/node-%E2%89%A5%2018-blue)
 ![license MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
-**Turn raw financial data — an aggregator dump (Plaid, MX, Finicity) or the CSV/OFX files a user
-can download from any bank — into a [planfi](https://api.planfi.app) financial plan.
+**Turn raw financial data — an aggregator dump (Plaid, MX, Finicity, FDX) or the CSV/OFX files a
+user can download from any bank — into a [planfi](https://api.planfi.app) financial plan.
 One function call, zero runtime dependencies. Ships a CLI.**
 
 You don't need to know Plaid or planfi to use this. An *aggregator* is a service that, with a
@@ -18,13 +18,17 @@ This package is the bridge between the two.
 ```
 Plaid ────┐
 MX ───────┤
-Finicity ─┼─ adapter.normalize() ─► Canonical Financial ─ toPlanfiPlan() ─► wire body ─ POST ─► plan_id
+Finicity ─┤
+FDX ──────┼─ adapter.normalize() ─► Canonical Financial ─ toPlanfiPlan() ─► wire body ─ POST ─► plan_id
 CSV files ┤   (vocabulary only)      Profile (CFP)          (all domain          (generate_
 OFX files ┘                                                  logic, once)         financial_plan)
 ```
 
 Adapters translate each provider's vocabulary into one canonical model; a single shared mapper does
-all the planfi thinking. Adding a provider never means re-writing the domain logic.
+all the planfi thinking. Adding a provider never means re-writing the domain logic — to write a new
+adapter (human or AI), follow [docs/ADAPTER_GUIDE.md](./docs/ADAPTER_GUIDE.md) (invariants in
+[AGENTS.md](./AGENTS.md)); a generic contract harness (`test/adapter-contract.test.mjs`) enforces
+the guide.
 
 ## Quick start (90 seconds)
 
@@ -88,13 +92,15 @@ became a living financial plan.
 
 For MX: `importToPlan('mx', { accounts, holdings, transactions, owner, asOf })`.
 For Finicity: `importToPlan('finicity', { accounts, positions, transactions, owner, asOf })`.
+For FDX: `importToPlan('fdx', { accounts, holdings, transactions, owner, asOf })` — accounts may be
+FDX-wrapped (`{ depositAccount: {…} }`) or flattened.
 No aggregator at all? See [Keyless import (CSV / OFX)](#keyless-import-csv--ofx) and the [CLI](#cli).
 Each adapter's file header documents exactly which provider endpoints feed each key.
 `owner` is your onboarding data (ages, goals — see [needsInput](#what-imports-vs-what-you-must-collect)).
 
 ## What maps where
 
-| Source (Plaid / MX / Finicity) | Plan field | What the engine does with it |
+| Source (Plaid / MX / Finicity / FDX) | Plan field | What the engine does with it |
 |---|---|---|
 | depository accounts (`checking`, `SAVINGS`, `cd`, …) | `cash.current_value` | Grows at the cash rate; funds spending first |
 | taxable investment (`brokerage`, `INVESTMENT`, `brokerageAccount`) | `stocks.current_value` + `account_balances.taxable` | Projected at `annual_return`; taxed as taxable in decumulation |
@@ -102,7 +108,7 @@ Each adapter's file header documents exactly which provider endpoints feed each 
 | Roth accounts (`roth`, `ROTH_IRA`) | `stocks.current_value` + `account_balances.roth` | In the portfolio total; withdrawn tax-free |
 | HSA balance | folded into `stocks.current_value` (warned) | No wire HSA-balance field exists — see [limitations](#limitations-honest) |
 | 529 / education (`529`, `529plan`, `educationIRA`) | `education_account.initialBalance` | Dedicated education projection (camelCase inside — engine shape) |
-| mortgage + property (MX `PROPERTY` pairs a real value; Plaid/Finicity have none → 80%-LTV estimate) | `real_estate[]` with `mortgage {balance, rate, years_remaining}` | Amortizes the loan, appreciates the home at 3.5%/yr |
+| mortgage + property (MX `PROPERTY` pairs a real value; Plaid/Finicity/FDX have none → 80%-LTV estimate) | `real_estate[]` with `mortgage {balance, rate, years_remaining}` | Amortizes the loan, appreciates the home at 3.5%/yr |
 | student/auto loans, credit cards | `debts[]` (`balance`, `rate`, `min_payment`) | Paid down in cash flow; APR compounds |
 | crypto holdings (security type) | `speculative[]` at 10% assumed growth | Kept out of the core stock projection |
 | investment transactions (deposits in) | `stocks.monthly_contribution` / `earners[].retirement_accounts.{k401,ira,hsa}` | Inferred savings rates (dividends/interest excluded; IRS-limit clamped) |
@@ -188,6 +194,7 @@ append-only** — switch on them; the human `message` may improve between versio
 | Plaid | `'plaid'` | accounts + holdings + liabilities + income + investment transactions |
 | MX | `'mx'` | accounts + holdings + transactions; `PROPERTY` gives real home values |
 | Finicity (Mastercard Open Banking) | `'finicity'` | accounts + positions + transactions; epoch-second dates handled |
+| FDX (Financial Data Exchange) | `'fdx'` | the US open-banking standard (CFPB §1033; Akoya speaks it natively); wrapped or flat Account entities, `debitCreditMemo`-aware contribution inference |
 | CSV files | `'csv'` | keyless; dialect table for Fidelity/Schwab/Vanguard positions + generic accounts/transactions layouts |
 | OFX files | `'ofx'` | keyless; OFX 1.x SGML and 2.x XML; bank + card + investment message sets |
 
@@ -254,9 +261,15 @@ npx planfi-import plan accounts.csv --source csv --token pft_… [--user-id u123
 
 ```bash
 npm install   # dev deps for the conformance test only — runtime stays zero-dep
-npm test      # node --test: fixtures, CLI spawns, fuzz (5×3000 randomized/hostile payloads), wire conformance
+npm test      # node --test: fixtures, CLI spawns, the generic adapter-contract harness,
+              # fuzz (6×3000 randomized/hostile payloads), wire conformance
 npm run demo  # print the full ImportResult built from the Plaid sandbox fixture
 ```
+
+`test/adapter-contract.test.mjs` is the generic floor: it discovers every adapter in `ADAPTERS`
+and runs the identical battery (structural CFP validity, cataloged warning codes, hostile inputs
+never throw, determinism, fixture registered for wire-conformance). It is the executable version
+of the checklist in [docs/ADAPTER_GUIDE.md](./docs/ADAPTER_GUIDE.md).
 
 Inside the planfi-app monorepo, `test/wire-conformance.test.mjs` round-trips every fixture through
 the **real** engine mapper and asserts each emitted field is consumed (in this standalone repo that

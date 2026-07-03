@@ -55,7 +55,11 @@ export const ofxAdapter = {
    * @param {object} raw - { content: string (OFX 1.x SGML or 2.x XML), owner, asOf }
    * @returns {CFP}
    */
-  normalize(raw = {}) {
+  normalize(raw) {
+    // Total function: null/primitive payloads normalize to an empty profile
+    // (a default parameter only covers `undefined` — the contract harness
+    // caught the null case throwing).
+    raw = raw && typeof raw === 'object' ? raw : {};
     const warnings = [];
     const unmapped = [];
     const accounts = [];

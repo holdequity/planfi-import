@@ -130,7 +130,7 @@ export interface NeedsInput {
 }
 
 export interface CanonicalFinancialProfile {
-  /** Adapter source id: 'plaid' | 'mx' | 'finicity' | ... */
+  /** Adapter source id: 'plaid' | 'mx' | 'finicity' | 'fdx' | ... */
   source: string;
   /** ISO timestamp of the underlying snapshot. */
   asOf: string;
@@ -204,7 +204,7 @@ export interface ToPlanfiOptions {
  * @throws if `source` is not a registered adapter id.
  */
 export function importToPlan(
-  source: 'plaid' | 'mx' | 'finicity' | 'csv' | 'ofx' | (string & {}),
+  source: 'plaid' | 'mx' | 'finicity' | 'fdx' | 'csv' | 'ofx' | (string & {}),
   raw: object,
   opts?: ToPlanfiOptions,
 ): ImportResult;
@@ -239,6 +239,15 @@ export function contributionsByAccount(
 export declare const plaidAdapter: SourceAdapter<object>;
 export declare const mxAdapter: SourceAdapter<object>;
 export declare const finicityAdapter: SourceAdapter<object>;
+
+/**
+ * FDX (Financial Data Exchange — the US open-banking standard; Akoya speaks
+ * it natively) → CFP. Raw shape: { accounts, holdings?, transactions?, owner?,
+ * asOf? } where accounts are FDX Account entities, wrapped
+ * ({ depositAccount: {…} } / { investmentAccount: {…} } / { loanAccount: {…} }
+ * / { locAccount: {…} }) or already flattened.
+ */
+export declare const fdxAdapter: SourceAdapter<object>;
 
 /** One CSV file handed to the csv adapter (the keyless path). */
 export interface CsvFile {

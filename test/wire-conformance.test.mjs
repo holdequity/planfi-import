@@ -27,11 +27,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { importToPlan } from '../src/index.mjs';
-import { plaidRaw } from '../fixtures/plaid-sandbox.mjs';
-import { mxRaw } from '../fixtures/mx-sandbox.mjs';
-import { finicityRaw } from '../fixtures/finicity-sandbox.mjs';
-import { csvRaw } from '../fixtures/csv-sandbox.mjs';
-import { ofxRaw } from '../fixtures/ofx-sandbox.mjs';
+import { FIXTURES as FIXTURE_REGISTRY } from './helpers/fixture-registry.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAPPER_PATH = path.resolve(__dirname, '../../workers/ai-mcp/src/lib/mapper.ts');
@@ -46,13 +42,11 @@ if (!IN_MONOREPO) {
   );
 }
 
-const FIXTURES = [
-  ['plaid', plaidRaw],
-  ['mx', mxRaw],
-  ['finicity', finicityRaw],
-  ['csv', csvRaw],
-  ['ofx', ofxRaw],
-];
+// One fixture per adapter, from the shared registry (test/helpers/
+// fixture-registry.mjs). The adapter-contract harness asserts every adapter
+// in ADAPTERS has an entry there, so this suite automatically covers new
+// adapters — no hand-maintained list to forget.
+const FIXTURES = Object.entries(FIXTURE_REGISTRY);
 
 /**
  * Parse the PlanRequest interface out of mapper.ts SOURCE to build the

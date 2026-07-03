@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // planfi-import CLI — zero-dependency, Node >= 18 (uses global fetch).
 //
+//   (adapter ids: plaid | mx | finicity | fdx | csv | ofx — see ADAPTERS)
 //   planfi-import demo [--source <id>] [--json]
 //       Run a bundled sandbox fixture through importToPlan and pretty-print
 //       the plan + warnings + needsInput. No credentials, no network.
@@ -42,7 +43,7 @@ const red = paint(31);
 const USAGE = `planfi-import — turn financial data exports into planfi plans
 
 Usage:
-  planfi-import demo [--source plaid|mx|finicity|csv|ofx] [--json]
+  planfi-import demo [--source plaid|mx|finicity|fdx|csv|ofx] [--json]
   planfi-import validate <payload> [<payload>…] --source <id> [--json]
   planfi-import plan <payload> [<payload>…] --source <id> [--token pft_…] [--user-id <id>] [--base <url>] [--json]
 
@@ -53,7 +54,7 @@ Commands:
   plan       Import AND create a real plan via POST /v1/tools/generate_financial_plan.
 
 Payloads:
-  plaid|mx|finicity  one .json file: the merged provider API responses.
+  plaid|mx|finicity|fdx  one .json file: the merged provider API responses.
   csv                one or more .csv files (passed directly), or one .json
                      payload of shape { files: [{name, content}], owner, asOf }.
   ofx                one .ofx/.qfx file (passed directly), or one .json payload.
